@@ -5,6 +5,9 @@ import cookieParser from "cookie-parser";
 
 import connectDB from "./config/db.js";
 import userRoutes from "./routes/userRoute.js";
+import leaveRoutes from './routes/leaveRoutes.js';
+import appointmentRoutes from './routes/appointmentRoutes.js'
+import prescriptionRoutes from './routes/prescriptionRoutes.js';
 
 dotenv.config();
 connectDB();
@@ -20,6 +23,9 @@ app.use(express.json());
 app.use(cookieParser());
 
 app.use("/api/users", userRoutes);
+app.use('/api/leaves', leaveRoutes);
+app.use('/api/appointments', appointmentRoutes);
+app.use('/api/prescriptions', prescriptionRoutes);
 
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "Server is healthy" });

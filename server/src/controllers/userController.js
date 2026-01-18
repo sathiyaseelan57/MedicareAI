@@ -70,7 +70,7 @@ export const authUser = asyncHandler(async (req, res) => {
 });
 
 // @desc    Logout - delete the cookie
-// @route   POST /api/users/login
+// @route   POST /api/users/logout
 // @access  Public
 export const logoutUser = (req, res) => {
   res.cookie("jwt", "", {

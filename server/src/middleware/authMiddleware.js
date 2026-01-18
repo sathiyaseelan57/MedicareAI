@@ -27,4 +27,14 @@ const protect = asyncHandler(async (req, res, next) => {
   }
 });
 
-export { protect };
+const doctor = (req, res, next) => {
+  // Check if user exists and if their role is DOCTOR
+  if (req.user && req.user.role === 'DOCTOR') {
+    next(); // They are a doctor, let them through!
+  } else {
+    res.status(401);
+    throw new Error('Not authorized as a doctor');
+  }
+};
+
+export { protect, doctor };
