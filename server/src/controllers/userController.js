@@ -2,8 +2,8 @@ import asyncHandler from "express-async-handler";
 
 import User from "../models/User.js";
 import generateToken from "../utils/generateToken.js";
-import PatientProfile from '../models/PatientProfile.js';
-import DoctorProfile from '../models/DoctorProfile.js';
+import PatientProfile from "../models/PatientProfile.js";
+import DoctorProfile from "../models/DoctorProfile.js";
 
 // @desc    Register a new user (Doctor or Patient)
 // @route   POST /api/users
@@ -14,7 +14,7 @@ export const registerUser = asyncHandler(async (req, res) => {
   const userExists = await User.findOne({ email });
   if (userExists) {
     res.status(400);
-    throw new Error('User already exists');
+    throw new Error("User already exists");
   }
 
   // Create the base authentication account
@@ -22,7 +22,7 @@ export const registerUser = asyncHandler(async (req, res) => {
 
   if (user) {
     // Initialize their medical profile
-    if (user.role === 'PATIENT') {
+    if (user.role === "PATIENT") {
       await PatientProfile.create({
         user: user._id,
       });
@@ -34,11 +34,14 @@ export const registerUser = asyncHandler(async (req, res) => {
       _id: user._id,
       name: user.name,
       role: user.role,
-      message: user.role === 'PATIENT' ? 'Patient registered and profile created' : 'User registered'
+      message:
+        user.role === "PATIENT"
+          ? "Patient registered and profile created"
+          : "User registered",
     });
   } else {
     res.status(400);
-    throw new Error('Invalid user data');
+    throw new Error("Invalid user data");
   }
 });
 
@@ -86,10 +89,16 @@ export const logoutUser = (req, res) => {
 export const getUserProfile = asyncHandler(async (req, res) => {
   let profile;
   // console.log(req);
-  if (req.user.role === 'DOCTOR') {
-    profile = await DoctorProfile.findOne({ user: req.user._id }).populate('user', 'name email');
-  } else if (req.user.role === 'PATIENT') {
-    profile = await PatientProfile.findOne({ user: req.user._id }).populate('user', 'name email');
+  if (req.user.role === "DOCTOR") {
+    profile = await DoctorProfile.findOne({ user: req.user._id }).populate(
+      "user",
+      "name email"
+    );
+  } else if (req.user.role === "PATIENT") {
+    profile = await PatientProfile.findOne({ user: req.user._id }).populate(
+      "user",
+      "name email"
+    );
     console.log(profile);
   } else {
     // For ADMIN or other roles without a profile table
@@ -100,7 +109,7 @@ export const getUserProfile = asyncHandler(async (req, res) => {
     res.json(profile);
   } else {
     res.status(404);
-    throw new Error('Profile not found');
+    throw new Error("Profile not found");
   }
 });
 
@@ -114,28 +123,28 @@ export const updateUserProfile = asyncHandler(async (req, res) => {
     // 1. Update Core User Data
     user.name = req.body.name || user.name;
     user.email = req.body.email || user.email;
-    
+
     if (req.body.password) {
       user.password = req.body.password; // Middleware will hash this automatically
     }
     const updatedUser = await user.save();
 
     // 2. Update Role-Specific Profile Data
-    if (user.role === 'PATIENT') {
+    if (user.role === "PATIENT") {
       await PatientProfile.findOneAndUpdate(
         { user: user._id },
-        { 
+        {
           bloodGroup: req.body.bloodGroup,
-          emergencyContact: req.body.emergencyContact 
+          emergencyContact: req.body.emergencyContact,
         },
         { new: true }
       );
-    } else if (user.role === 'DOCTOR') {
+    } else if (user.role === "DOCTOR") {
       await DoctorProfile.findOneAndUpdate(
         { user: user._id },
-        { 
+        {
           specialization: req.body.specialization,
-          licenseNumber: req.body.licenseNumber 
+          licenseNumber: req.body.licenseNumber,
         },
         { new: true }
       );
@@ -146,10 +155,92 @@ export const updateUserProfile = asyncHandler(async (req, res) => {
       name: updatedUser.name,
       email: updatedUser.email,
       role: updatedUser.role,
-      message: 'Profile updated successfully'
+      message: "Profile updated successfully",
     });
   } else {
     res.status(404);
-    throw new Error('User not found');
+    throw new Error("User not found");
   }
+});
+
+// @desc    Assign a patient to a doctor
+// @route   PUT /api/users/assign-patient
+// @access  Private/Doctor
+export const assignPatient = asyncHandler(async (req, res) => {
+  const { patientId } = req.body;
+  const doctorId = req.user._id;
+
+  // 1. Update the Patient's assignedDoctor field
+  const patient = await User.findByIdAndUpdate(
+    patientId,
+    { assignedDoctor: doctorId },
+    { new: true }
+  );
+
+  if (!patient) {
+    res.status(404);
+    throw new Error("Patient not found");
+  }
+
+  // 2. Add the Patient to the Doctor's myPatients array (if not already there)
+  await User.findByIdAndUpdate(
+    doctorId,
+    { $addToSet: { myPatients: patientId } } // $addToSet prevents duplicates
+  );
+
+  res.json({
+    message: "Patient assigned successfully",
+    patientName: patient.name,
+    doctorName: req.user.name,
+  });
+});
+
+// @desc    Get all patients assigned to the logged-in doctor
+// @route   GET /api/users/my-patients
+// @access  Private/Doctor
+export const getMyPatients = asyncHandler(async (req, res) => {
+  const doctor = await User.findById(req.user._id).populate(
+    "myPatients",
+    "name email createdAt"
+  );
+
+  res.json(doctor.myPatients);
+});
+
+// @desc    Get patient's full medical status (Doctor, Appt, Meds)
+// @route   GET /api/users/my-status
+// @access  Private/Patient
+export const getMyStatus = asyncHandler(async (req, res) => {
+  const patientId = req.user._id;
+
+  // 1. Get Assigned Doctor
+  const patient = await User.findById(patientId).populate(
+    "assignedDoctor",
+    "name email"
+  );
+
+  // 2. Get Today's Appointment
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999);
+
+  const todayAppointment = await Appointment.findOne({
+    patient: patientId,
+    appointmentDate: { $gte: startOfToday, $lte: endOfToday },
+    status: "Scheduled",
+  }).populate("doctor", "name");
+
+  // 3. Get Active Prescription & Checklist
+  const activePrescription = await Prescription.findOne({
+    patient: patientId,
+    isActive: true,
+  }).populate("doctor", "name");
+
+  // Send everything back in one go
+  res.json({
+    doctor: patient.assignedDoctor || "No doctor assigned yet",
+    appointment: todayAppointment || "No appointment today",
+    prescription: activePrescription || "No active medications",
+  });
 });

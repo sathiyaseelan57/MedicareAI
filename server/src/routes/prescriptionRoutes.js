@@ -1,15 +1,15 @@
-import express from 'express';
+import express from "express";
 const router = express.Router();
-import { 
-    addPrescription, 
-    getActivePrescription 
-} from '../controllers/prescriptionController.js';
-import { protect, doctor } from '../middleware/authMiddleware.js';
+import {
+  addPrescription,
+  getActivePrescription,
+  getAdherenceScore,
+} from "../controllers/prescriptionController.js";
+import { protect, doctor } from "../middleware/authMiddleware.js";
 
-// Route for the Doctor to prescribe during/after appointment
-router.post('/', protect, doctor, addPrescription);
+router.post("/", protect, doctor, addPrescription);
+router.get("/my-checklist", protect, getActivePrescription);
 
-// Route for the Patient to see their current checklist
-router.get('/my-checklist', protect, getActivePrescription);
+router.get("/adherence/:patientId", protect, getAdherenceScore);
 
 export default router;
