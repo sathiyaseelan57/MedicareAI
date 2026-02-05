@@ -1,5 +1,6 @@
 import express from "express";
 import {
+  assignPatient,
   authUser,
   getMyStatus,
   getUserProfile,
@@ -18,5 +19,6 @@ router
   .get(protect, getUserProfile)
   .put(protect, updateUserProfile);
 router.get("/my-status", protect, getMyStatus);
+router.put("/assign-patient", protect, assignPatient);
 
 export default router;

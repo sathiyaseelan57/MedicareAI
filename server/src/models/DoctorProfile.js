@@ -17,12 +17,19 @@ const doctorProfileSchema = new mongoose.Schema(
       unique: true,
       sparse: true,
     },
+    contactNumber: {
+      type: String,
+    },
     isVerified: {
       type: Boolean,
       default: false,
     },
+    // Optional availability/reference info
+    practiceLocation: String,
+    notes: String,
   },
   { timestamps: true }
 );
 
-export default mongoose.model("DoctorProfile", doctorProfileSchema);
+const DoctorProfile = mongoose.model("DoctorProfile", doctorProfileSchema);
+export default DoctorProfile;

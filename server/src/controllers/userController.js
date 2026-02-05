@@ -4,6 +4,8 @@ import User from "../models/User.js";
 import generateToken from "../utils/generateToken.js";
 import PatientProfile from "../models/PatientProfile.js";
 import DoctorProfile from "../models/DoctorProfile.js";
+import Appointment from "../models/Appointment.js";
+import Prescription from "../models/Prescription.js";
 
 // @desc    Register a new user (Doctor or Patient)
 // @route   POST /api/users
@@ -26,6 +28,10 @@ export const registerUser = asyncHandler(async (req, res) => {
       await PatientProfile.create({
         user: user._id,
       });
+    } else if (user.role === "DOCTOR") {
+      await DoctorProfile.create({
+        user: user._id,
+      });
     }
 
     generateToken(res, user._id);
@@ -33,10 +39,13 @@ export const registerUser = asyncHandler(async (req, res) => {
     res.status(201).json({
       _id: user._id,
       name: user.name,
+      email: user.email,
       role: user.role,
       message:
         user.role === "PATIENT"
           ? "Patient registered and profile created"
+          : user.role === "DOCTOR"
+          ? "Doctor registered and profile created"
           : "User registered",
     });
   } else {
@@ -87,8 +96,8 @@ export const logoutUser = (req, res) => {
 // @route   GET /api/users/profile
 // @access  Private
 export const getUserProfile = asyncHandler(async (req, res) => {
-  let profile;
-  // console.log(req);
+  let profile = null;
+
   if (req.user.role === "DOCTOR") {
     profile = await DoctorProfile.findOne({ user: req.user._id }).populate(
       "user",
@@ -99,68 +108,69 @@ export const getUserProfile = asyncHandler(async (req, res) => {
       "user",
       "name email"
     );
-    console.log(profile);
   } else {
-    // For ADMIN or other roles without a profile table
-    return res.json(req.user);
+    // ADMIN or other
+    profile = await User.findById(req.user._id).select("-password");
   }
 
-  if (profile) {
-    res.json(profile);
-  } else {
+  if (!profile) {
     res.status(404);
     throw new Error("Profile not found");
   }
+
+  res.json(profile);
 });
 
-// @desc    Update user profile
+// @desc    Update user profile and role-specific profile
 // @route   PUT /api/users/profile
 // @access  Private
 export const updateUserProfile = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user._id);
 
-  if (user) {
-    // 1. Update Core User Data
-    user.name = req.body.name || user.name;
-    user.email = req.body.email || user.email;
-
-    if (req.body.password) {
-      user.password = req.body.password; // Middleware will hash this automatically
-    }
-    const updatedUser = await user.save();
-
-    // 2. Update Role-Specific Profile Data
-    if (user.role === "PATIENT") {
-      await PatientProfile.findOneAndUpdate(
-        { user: user._id },
-        {
-          bloodGroup: req.body.bloodGroup,
-          emergencyContact: req.body.emergencyContact,
-        },
-        { new: true }
-      );
-    } else if (user.role === "DOCTOR") {
-      await DoctorProfile.findOneAndUpdate(
-        { user: user._id },
-        {
-          specialization: req.body.specialization,
-          licenseNumber: req.body.licenseNumber,
-        },
-        { new: true }
-      );
-    }
-
-    res.json({
-      _id: updatedUser._id,
-      name: updatedUser.name,
-      email: updatedUser.email,
-      role: updatedUser.role,
-      message: "Profile updated successfully",
-    });
-  } else {
+  if (!user) {
     res.status(404);
     throw new Error("User not found");
   }
+
+  user.name = req.body.name || user.name;
+  user.email = req.body.email || user.email;
+
+  if (req.body.password) {
+    user.password = req.body.password;
+  }
+
+  const updatedUser = await user.save();
+
+  if (updatedUser.role === "PATIENT") {
+    await PatientProfile.findOneAndUpdate(
+      { user: updatedUser._id },
+      {
+        bloodGroup: req.body.bloodGroup,
+        emergencyContact: req.body.emergencyContact,
+        contactNumber: req.body.contactNumber,
+        allergies: req.body.allergies,
+      },
+      { new: true, upsert: true }
+    );
+  } else if (updatedUser.role === "DOCTOR") {
+    await DoctorProfile.findOneAndUpdate(
+      { user: updatedUser._id },
+      {
+        specialization: req.body.specialization,
+        licenseNumber: req.body.licenseNumber,
+        contactNumber: req.body.contactNumber,
+      },
+      { new: true, upsert: true }
+    );
+  }
+
+  res.json({
+    _id: updatedUser._id,
+    name: updatedUser.name,
+    email: updatedUser.email,
+    role: updatedUser.role,
+    message: "Profile updated successfully",
+  });
 });
 
 // @desc    Assign a patient to a doctor
@@ -168,31 +178,30 @@ export const updateUserProfile = asyncHandler(async (req, res) => {
 // @access  Private/Doctor
 export const assignPatient = asyncHandler(async (req, res) => {
   const { patientId } = req.body;
-  const doctorId = req.user._id;
 
-  // 1. Update the Patient's assignedDoctor field
-  const patient = await User.findByIdAndUpdate(
-    patientId,
-    { assignedDoctor: doctorId },
-    { new: true }
-  );
-
-  if (!patient) {
-    res.status(404);
-    throw new Error("Patient not found");
+  // Only doctors can assign patients
+  if (req.user.role !== "DOCTOR") {
+    res.status(403);
+    throw new Error("Only doctors can assign patients");
   }
 
-  // 2. Add the Patient to the Doctor's myPatients array (if not already there)
-  await User.findByIdAndUpdate(
-    doctorId,
-    { $addToSet: { myPatients: patientId } } // $addToSet prevents duplicates
-  );
+  const patient = await User.findById(patientId);
+  if (!patient || patient.role !== "PATIENT") {
+    res.status(400);
+    throw new Error("Invalid patient id");
+  }
 
-  res.json({
-    message: "Patient assigned successfully",
-    patientName: patient.name,
-    doctorName: req.user.name,
-  });
+  // Update patient's assignedDoctor and doctor's myPatients if not already present
+  patient.assignedDoctor = req.user._id;
+  await patient.save();
+
+  const doctor = await User.findById(req.user._id);
+  if (!doctor.myPatients.map(String).includes(String(patient._id))) {
+    doctor.myPatients.push(patient._id);
+    await doctor.save();
+  }
+
+  res.json({ message: "Patient successfully assigned to doctor" });
 });
 
 // @desc    Get all patients assigned to the logged-in doctor

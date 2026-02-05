@@ -6,7 +6,8 @@ import MedicationLog from "../models/MedicationLog.js";
 // @route   POST /api/prescriptions
 // @access  Private/Doctor
 export const addPrescription = asyncHandler(async (req, res) => {
-  const { patientId, appointmentId, medicines, startDate, endDate } = req.body;
+  const { patientId, appointmentId, medicines, startDate, endDate, notes } =
+    req.body;
 
   // 1. Basic Check
   if (!medicines || medicines.length === 0) {
@@ -14,11 +15,11 @@ export const addPrescription = asyncHandler(async (req, res) => {
     throw new Error("A prescription must contain at least one medicine");
   }
 
-  // 2. Date Validation
-  const start = new Date(startDate);
-  const end = new Date(endDate);
+  // 2. Date Validation - convert to Date objects
+  const start = startDate ? new Date(startDate) : null;
+  const end = endDate ? new Date(endDate) : null;
 
-  if (end <= start) {
+  if (start && end && end <= start) {
     res.status(400);
     throw new Error("End date must be after the start date");
   }
@@ -42,7 +43,7 @@ export const addPrescription = asyncHandler(async (req, res) => {
     }
   }
 
-  // 4. Deactivate Old & Create New (Existing logic)
+  // 4. Deactivate Old & Create New
   await Prescription.updateMany(
     { patient: patientId, isActive: true },
     { isActive: false }
@@ -53,8 +54,9 @@ export const addPrescription = asyncHandler(async (req, res) => {
     doctor: req.user._id,
     appointment: appointmentId,
     medicines,
-    startDate,
-    endDate,
+    startDate: start,
+    endDate: end,
+    notes,
     isActive: true,
   });
 
@@ -82,11 +84,15 @@ export const getActivePrescription = asyncHandler(async (req, res) => {
 // @access  Private/Patient
 export const logMedication = asyncHandler(async (req, res) => {
   const { prescriptionId, medicineName, timing } = req.body;
-  const today = new Date().toISOString().split("T")[0]; // Get YYYY-MM-DD
 
-  // Check if already logged for today to prevent double-clicks
+  // Normalize "today" to midnight UTC-local by zeroing hours - keeps day semantics consistent.
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Check if already logged for today to prevent double entries
   const existingLog = await MedicationLog.findOne({
     patient: req.user._id,
+    prescription: prescriptionId,
     medicineName,
     date: today,
     timing,
@@ -109,7 +115,7 @@ export const logMedication = asyncHandler(async (req, res) => {
   res.status(201).json(log);
 });
 
-// @desc    Calculate medication adherence percentage for the last 7 days
+// @desc    Calculate medication adherence percentage for the last N days (default 7)
 // @route   GET /api/prescriptions/adherence/:patientId
 // @access  Private/Doctor
 export const getAdherenceScore = asyncHandler(async (req, res) => {
@@ -126,22 +132,29 @@ export const getAdherenceScore = asyncHandler(async (req, res) => {
   }
 
   // 2. Calculate how many doses SHOULD have been taken
-  // (Number of meds in prescription) * (days)
-  const totalExpectedDoses = prescription.medicines.length * daysToTrack;
+  const medsCount = Array.isArray(prescription.medicines)
+    ? prescription.medicines.length
+    : 0;
+  if (medsCount === 0) {
+    return res.json({ score: 0, message: "Prescription has no medicines" });
+  }
+  const totalExpectedDoses = medsCount * daysToTrack;
 
-  // 3. Count how many logs exist for the last 7 days
+  // 3. Count how many logs exist for the last N days using the normalized date field
   const startDate = new Date();
-  startDate.setDate(startDate.getDate() - daysToTrack);
+  startDate.setHours(0, 0, 0, 0);
+  startDate.setDate(startDate.getDate() - (daysToTrack - 1));
 
   const logsCount = await MedicationLog.countDocuments({
     patient: patientId,
     prescription: prescription._id,
     status: "Taken",
-    createdAt: { $gte: startDate },
+    date: { $gte: startDate },
   });
 
   // 4. Calculate Percentage
-  const adherenceRate = (logsCount / totalExpectedDoses) * 100;
+  const adherenceRate =
+    totalExpectedDoses > 0 ? (logsCount / totalExpectedDoses) * 100 : 0;
 
   res.json({
     patientId,
