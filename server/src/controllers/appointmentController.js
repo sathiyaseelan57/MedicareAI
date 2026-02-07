@@ -222,3 +222,38 @@ export const getAppointmentsByRange = asyncHandler(async (req, res) => {
 
   res.json(appointments);
 });
+
+// @desc    Cancel an appointment
+// @route   PUT /api/appointments/:id/cancel
+// @access  Private (Patient or Doctor)
+export const cancelAppointment = async (req, res) => {
+  try {
+    const appointment = await Appointment.findById(req.params.id);
+
+    if (!appointment) {
+      return res.status(404).json({ message: "Appointment not found" });
+    }
+
+    // Authorization check: Only the patient or doctor involved can cancel
+    if (
+      appointment.patientId.toString() !== req.user._id.toString() &&
+      appointment.doctorId.toString() !== req.user._id.toString()
+    ) {
+      return res
+        .status(401)
+        .json({ message: "Not authorized to cancel this appointment" });
+    }
+
+    // Update status instead of deleting
+    appointment.status = "Cancelled";
+    await appointment.save();
+
+    res.status(200).json({
+      success: true,
+      message: "Appointment cancelled successfully",
+      appointment,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Server Error", error: error.message });
+  }
+};

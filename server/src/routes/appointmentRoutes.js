@@ -2,7 +2,6 @@ import express from "express";
 import { protect, doctor } from "../middleware/authMiddleware.js";
 import {
   bookAppointment,
-  cancelAppointment,
   getAppointmentsByRange,
   getDoctorDashboard,
   getMyAppointments,
