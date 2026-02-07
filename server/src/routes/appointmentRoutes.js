@@ -6,6 +6,7 @@ import {
   getDoctorDashboard,
   getMyAppointments,
   updateAppointmentStatus,
+  cancelAppointment,
 } from "../controllers/appointmentController.js";
 
 const router = express.Router();
