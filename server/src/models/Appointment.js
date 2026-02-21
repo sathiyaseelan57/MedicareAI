@@ -1,39 +1,42 @@
 // models/Appointment.js
-import mongoose from 'mongoose';
+import mongoose from "mongoose";
 
 const appointmentSchema = mongoose.Schema(
   {
-    patient: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-      required: true,
+    patient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    doctor: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    appointmentDate: { type: Date, required: true },
+    status: { 
+      type: String, 
+      enum: ["Scheduled", "Confirmed", "Completed", "Cancelled"], 
+      default: "Scheduled" 
     },
-    doctor: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User', // We link to the User model, but we'll ensure they have the DOCTOR role
-      required: true,
+    reason: { type: String },
+    
+    // --- ADD THESE FIELDS ---
+    diagnosis: { type: String },
+    notes: { type: String },
+    vitalsAtVisit: {
+      temp: String,
+      bp: String,
+      pulse: String,
+      weightKg: String,
     },
-    appointmentDate: {
-      type: Date,
-      required: true,
+    followUpDate: { type: Date },
+    
+    // Linking to other collections for Population
+    prescription: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "Prescription" 
     },
-    status: {
-      type: String,
-      enum: ['Scheduled', 'Completed', 'Cancelled'],
-      default: 'Scheduled',
-    },
-    reason: {
-      type: String,
-      required: true,
-    },
-    notes: {
-      type: String, // Doctor's feedback after the visit
-    },
+    reports: [{ 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: "Report" 
+    }], 
+    // ------------------------
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-const Appointment = mongoose.model('Appointment', appointmentSchema);
+const Appointment = mongoose.model("Appointment", appointmentSchema);
 export default Appointment;

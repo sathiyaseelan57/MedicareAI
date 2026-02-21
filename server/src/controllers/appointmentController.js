@@ -2,6 +2,7 @@ import asyncHandler from "express-async-handler";
 import Appointment from "../models/Appointment.js";
 import User from "../models/User.js";
 import Prescription from "../models/Prescription.js";
+import Report from "../models/Report.js";
 
 // @desc    Book an appointment
 // @route   POST /api/appointments
@@ -15,8 +16,6 @@ export const bookAppointment = asyncHandler(async (req, res) => {
     patientId,
     appointmentDate,
     reason,
-    diagnosis,
-    treatmentPlan,
     medicines,
   } = req.body;
 
@@ -47,12 +46,14 @@ export const bookAppointment = asyncHandler(async (req, res) => {
       throw new Error("Doctor and patient cannot be the same user");
     }
 
+    // In your backend bookAppointment controller
     const appointment = await Appointment.create({
-      patient: req.user._id,
-      doctor: doctor._id,
+      patient: patientId || req.user._id,
+      doctor: doctorId,
       appointmentDate: apptDate,
       status: "Scheduled",
-      reason: reason || "Consultation",
+      reason: reason,
+      referredBy: req.user.role === "DOCTOR" ? req.user._id : null, // Tracks who made the booking
     });
 
     res.status(201).json(appointment);
@@ -82,9 +83,7 @@ export const bookAppointment = asyncHandler(async (req, res) => {
       patient: patient._id,
       doctor: req.user._id,
       appointmentDate: apptDate,
-      status: "Completed", // doctor-submitted visit often completed immediately
-      diagnosis,
-      treatmentPlan,
+      status: "Scheduled", // doctor-submitted visit often completed immediately
       reason: reason || "First Consultation / Walk-in",
     });
 
@@ -115,26 +114,124 @@ export const bookAppointment = asyncHandler(async (req, res) => {
   throw new Error("Only patients or doctors can book appointments");
 });
 
-// @desc    Get list of appointments for logged-in user
+// @desc    Get single appointment details
+// @route   GET /api/appointments/:id
+// @access  Private
+export const getAppointmentById = asyncHandler(async (req, res) => {
+  // 1. Fetch the appointment with explicit population
+  const appointment = await Appointment.findById(req.params.id)
+    .populate({
+      path: "patient",
+      select: "name email gender age"
+    })
+    .populate({
+      path: "doctor",
+      select: "name email specialization"
+    })
+    .populate({
+      path: "prescription",
+      model: "Prescription", // Explicitly naming the model helps if registration is delayed
+    });
+
+  if (!appointment) {
+    res.status(404);
+    throw new Error("Appointment not found");
+  }
+
+  // 2. Fetch Reports manually using the appointment ID
+  // This is the most reliable way since the Report model already has 'appointment' field
+  const reports = await Report.find({ appointment: req.params.id }).lean();
+
+  // 3. Manually construct the response to ensure nothing is stripped out
+  // We use .toObject() or ._doc to get the raw data from the Mongoose document
+  const appointmentData = appointment.toObject();
+
+  res.status(200).json({
+    ...appointmentData,
+    reports: reports || [], // Inject the reports array here
+  });
+});
+
+// @desc    Get list of appointments for logged-in user with full clinical details
 // @route   GET /api/appointments
 // @access  Private
 export const getMyAppointments = asyncHandler(async (req, res) => {
-  let appointments;
+  let query = {};
+
+  // Define filter based on role
   if (req.user.role === "DOCTOR") {
-    appointments = await Appointment.find({ doctor: req.user._id })
-      .populate("patient", "name email")
-      .sort({ appointmentDate: -1 });
+    query = { doctor: req.user._id };
   } else if (req.user.role === "PATIENT") {
-    appointments = await Appointment.find({ patient: req.user._id })
-      .populate("doctor", "name email")
-      .sort({ appointmentDate: -1 });
-  } else {
-    appointments = await Appointment.find()
-      .populate("patient doctor", "name email")
-      .sort({ appointmentDate: -1 });
+    query = { patient: req.user._id };
   }
 
+  // Fetch appointments with deep population
+  const appointments = await Appointment.find(query)
+    .populate("patient", "name email gender age") // Basic patient info
+    .populate("doctor", "name email specialization") // Basic doctor info
+    .populate({
+      path: "prescription", // Populate the Prescription model
+      populate: {
+        path: "medicines", // If medicines is a sub-document or ref, it gets pulled
+      }
+    })
+    .populate("reports") // Populate the array of Reports
+    .sort({ appointmentDate: -1 });
+
   res.json(appointments);
+});
+
+// @desc    Complete Consultation
+// @route   PUT /api/appointments/:id/complete
+export const completeConsultation = asyncHandler(async (req, res) => {
+  const { 
+    diagnosis, notes, vitalsAtVisit, followUpDate,
+    medicines, reports 
+  } = req.body;
+
+  const appointment = await Appointment.findById(req.params.id);
+  if (!appointment) {
+    res.status(404);
+    throw new Error("Appointment not found");
+  }
+
+  // 1. Save Prescription
+  let savedPrescription = null;
+  if (medicines && medicines.length > 0) {
+    savedPrescription = await Prescription.create({
+      patient: appointment.patient,
+      doctor: appointment.doctor,
+      appointment: appointment._id,
+      medicines,
+      startDate: new Date(),
+    });
+  }
+
+  // 2. Update Appointment
+  appointment.status = "Completed";
+  appointment.diagnosis = diagnosis;
+  appointment.notes = notes;
+  appointment.vitalsAtVisit = vitalsAtVisit;
+  appointment.followUpDate = followUpDate;
+  appointment.appointmentDate = new Date();
+  if (savedPrescription) appointment.prescription = savedPrescription._id;
+  await appointment.save();
+
+  // 3. Save Multiple Reports (Name, Status, and URL)
+  if (reports && reports.length > 0) {
+    const reportDocs = reports.map(rep => ({
+      patient: appointment.patient,
+      doctor: appointment.doctor,
+      appointment: appointment._id,
+      reportName: rep.reportName,
+      fileUrl: rep.fileUrl,
+      publicId: rep.publicId,
+      status: "Analyzed" // Setting status as Analyzed since doctor is uploading during visit
+    }));
+    await Report.insertMany(reportDocs);
+  }
+
+  res.status(200).json({ message: "Consultation finalized successfully" });
 });
 
 // @desc    Update appointment status/notes (Doctor only)
@@ -202,6 +299,8 @@ export const getAppointmentsByRange = asyncHandler(async (req, res) => {
 
   const { start, end } = req.query;
 
+  // Logic: If no dates provided, maybe default to "This Month"
+  // but for now, we'll keep your requirement for providing dates.
   if (!start || !end) {
     res.status(400);
     throw new Error("Please provide both start and end dates");
@@ -217,8 +316,13 @@ export const getAppointmentsByRange = asyncHandler(async (req, res) => {
     doctor: req.user._id,
     appointmentDate: { $gte: startDate, $lte: endDate },
   })
-    .sort({ appointmentDate: 1 })
-    .populate("patient", "name email");
+    .sort({ appointmentDate: -1 }) // -1 gives you Newest First
+    .populate({
+      path: "patient",
+      select: "name email",
+      // If you want clinical details from the PatientProfile model:
+      // populate: { path: "profile", select: "age gender mrn" }
+    });
 
   res.json(appointments);
 });

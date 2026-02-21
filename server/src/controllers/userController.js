@@ -11,12 +11,16 @@ import Prescription from "../models/Prescription.js";
 // @route   POST /api/users
 // @access  Public
 export const registerUser = asyncHandler(async (req, res) => {
-  const { name, email, password, role } = req.body;
+  const { name, email, password, role, code } = req.body;
 
   const userExists = await User.findOne({ email });
   if (userExists) {
     res.status(400);
     throw new Error("User already exists");
+  }
+  if (role === "DOCTOR" && code !== process.env.AUTHORIZATION_KEY) {
+    res.status(400);
+    throw new Error("Invalid authorization code");
   }
 
   // Create the base authentication account
@@ -54,30 +58,139 @@ export const registerUser = asyncHandler(async (req, res) => {
   }
 });
 
+// @desc    Add Patient
+// @route   POST /api/users/add-patient
+// @access  Private (Doctor Only)
+export const addPatient = asyncHandler(async (req, res) => {
+  const {
+    name,
+    email,
+    password,
+    age,
+    gender,
+    bloodGroup,
+    contactNumber,
+    heightCm,
+    weightKg,
+    currentStatus,
+    emergencyContact,
+    allergies,
+    currentMedications,
+  } = req.body;
+
+  // 1. Validation
+  const userExists = await User.findOne({ email });
+  if (userExists) {
+    res.status(400);
+    throw new Error("User with this email already exists");
+  }
+
+  // 2. Create the User Account (Role: PATIENT)
+  // We assign the doctor's ID (from req.user) to the patient's assignedDoctor field
+  const patientUser = await User.create({
+    name,
+    email,
+    password, // This will be hashed automatically by your pre-save hook
+    role: "PATIENT",
+    assignedDoctor: req.user._id,
+  });
+
+  if (!patientUser) {
+    res.status(400);
+    throw new Error("Invalid patient user data");
+  }
+
+  // 3. Create the Patient Profile (Clinical Data)
+  const patientProfile = await PatientProfile.create({
+    user: patientUser._id,
+    age,
+    gender,
+    bloodGroup,
+    contactNumber,
+    heightCm,
+    weightKg,
+    currentStatus,
+    emergencyContact,
+    allergies,
+    currentMedications,
+  });
+
+  // 4. Link the Patient to the Doctor's "myPatients" list
+  await User.findByIdAndUpdate(req.user._id, {
+    $push: { myPatients: patientUser._id },
+  });
+
+  if (patientProfile) {
+    res.status(201).json({
+      success: true,
+      message: "Patient registered and profile created successfully",
+      data: {
+        _id: patientUser._id,
+        name: patientUser.name,
+        email: patientUser.email,
+        mrn: patientProfile.medicalRecordNumber,
+      },
+    });
+  } else {
+    // Cleanup: If profile fails, remove the created user to prevent "ghost" accounts
+    await User.findByIdAndDelete(patientUser._id);
+    res.status(400);
+    throw new Error("Failed to create patient medical profile");
+  }
+});
+
 // @desc    Auth user & get token (Login)
 // @route   POST /api/users/login
 // @access  Public
 export const authUser = asyncHandler(async (req, res) => {
-  const { email, password } = req.body;
+  const { loginId, password, role } = req.body;
 
-  // 1. Find user by email
-  const user = await User.findOne({ email }).select("+password");
-  console.log(user);
-  // 2. Check if user exists AND password matches
-  if (user && (await user.matchPassword(password))) {
-    // 3. Issue the secure cookie
-    generateToken(res, user._id);
+  let authenticatedUser = null;
+
+  // 1. Logic for DOCTOR (Direct check on User collection)
+  if (role === "DOCTOR") {
+    const user = await User.findOne({ email: loginId }).select("+password");
+
+    if (user && (await user.matchPassword(password))) {
+      authenticatedUser = user;
+    }
+  }
+
+  // 2. Logic for PATIENT (Check Profile first, then User)
+  else if (role === "PATIENT") {
+    // Find the profile by MRN
+    const profile = await PatientProfile.findOne({
+      medicalRecordNumber: loginId,
+    });
+
+    if (profile) {
+      // Find the associated User object using the ID stored in the profile
+      // Assuming your profile field is called 'user' or 'userId'
+      const user = await User.findById(profile.user).select("+password");
+
+      if (user && (await user.matchPassword(password))) {
+        authenticatedUser = user;
+      }
+    }
+  }
+
+  // 3. Final Verification and Response
+  if (authenticatedUser) {
+    generateToken(res, authenticatedUser._id);
 
     res.json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
+      _id: authenticatedUser._id,
+      name: authenticatedUser.name,
+      email: authenticatedUser.email,
+      role: authenticatedUser.role,
+      // You can also send the MRN back if needed
+      mrn: role === "PATIENT" ? loginId : null,
     });
   } else {
-    // 4. If something is wrong, send a 401 (Unauthorized)
     res.status(401);
-    throw new Error("Invalid email or password");
+    throw new Error(
+      "Invalid credentials. Please check your MRN/Email and Password."
+    );
   }
 });
 
@@ -92,38 +205,30 @@ export const logoutUser = (req, res) => {
   res.status(200).json({ message: "Logged out successfully" });
 };
 
-// @desc    Get user profile
-// @route   GET /api/users/profile
-// @access  Private
 export const getUserProfile = asyncHandler(async (req, res) => {
-  let profile = null;
+  let profileData = null;
 
   if (req.user.role === "DOCTOR") {
-    profile = await DoctorProfile.findOne({ user: req.user._id }).populate(
-      "user",
-      "name email"
-    );
+    profileData = await DoctorProfile.findOne({ user: req.user._id }).populate("user", "name email role");
   } else if (req.user.role === "PATIENT") {
-    profile = await PatientProfile.findOne({ user: req.user._id }).populate(
-      "user",
-      "name email"
-    );
-  } else {
-    // ADMIN or other
-    profile = await User.findById(req.user._id).select("-password");
+    profileData = await PatientProfile.findOne({ user: req.user._id }).populate("user", "name email role");
   }
 
-  if (!profile) {
-    res.status(404);
-    throw new Error("Profile not found");
+  // If profile doc doesn't exist yet, return basic user info 
+  // so the user can still see the page and create their profile
+  if (!profileData) {
+    const user = await User.findById(req.user._id).select("-password");
+    if (!user) {
+      res.status(404);
+      throw new Error("User not found");
+    }
+    // Return a consistent structure
+    return res.json({ user, isNewProfile: true });
   }
 
-  res.json(profile);
+  res.json(profileData);
 });
 
-// @desc    Update user profile and role-specific profile
-// @route   PUT /api/users/profile
-// @access  Private
 export const updateUserProfile = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user._id);
 
@@ -132,44 +237,59 @@ export const updateUserProfile = asyncHandler(async (req, res) => {
     throw new Error("User not found");
   }
 
-  user.name = req.body.name || user.name;
-  user.email = req.body.email || user.email;
-
-  if (req.body.password) {
-    user.password = req.body.password;
+  // 1. Update User Document
+  user.name = req.body.user?.name || req.body.name || user.name;
+  
+  // Only update password if a new one is provided
+  if (req.body.password && req.body.password.trim() !== "") {
+    user.password = req.body.password; 
   }
-
+  
   const updatedUser = await user.save();
 
-  if (updatedUser.role === "PATIENT") {
-    await PatientProfile.findOneAndUpdate(
-      { user: updatedUser._id },
-      {
-        bloodGroup: req.body.bloodGroup,
-        emergencyContact: req.body.emergencyContact,
-        contactNumber: req.body.contactNumber,
-        allergies: req.body.allergies,
-      },
-      { new: true, upsert: true }
-    );
-  } else if (updatedUser.role === "DOCTOR") {
-    await DoctorProfile.findOneAndUpdate(
-      { user: updatedUser._id },
-      {
+  // 2. Update Profile Document (Doctor or Patient)
+  let updatedProfile = null;
+
+  if (user.role === "DOCTOR") {
+    updatedProfile = await DoctorProfile.findOneAndUpdate(
+      { user: user._id },
+      { 
         specialization: req.body.specialization,
         licenseNumber: req.body.licenseNumber,
         contactNumber: req.body.contactNumber,
+        practiceLocation: req.body.practiceLocation,
+      },
+      { new: true, upsert: true }
+    );
+  } else if (user.role === "PATIENT") {
+    updatedProfile = await PatientProfile.findOneAndUpdate(
+      { user: user._id },
+      { 
+        age: req.body.age,
+        gender: req.body.gender,
+        bloodGroup: req.body.bloodGroup,
+        contactNumber: req.body.contactNumber,
+        heightCm: req.body.heightCm,
+        weightKg: req.body.weightKg,
+        emergencyContact: {
+          name: req.body.emergencyContact?.name,
+          relationship: req.body.emergencyContact?.relationship,
+          phone: req.body.emergencyContact?.phone,
+        }
       },
       { new: true, upsert: true }
     );
   }
 
+  // 3. Construct flattened response
   res.json({
-    _id: updatedUser._id,
-    name: updatedUser.name,
-    email: updatedUser.email,
-    role: updatedUser.role,
-    message: "Profile updated successfully",
+    ...updatedProfile._doc,
+    user: {
+      _id: updatedUser._id,
+      name: updatedUser.name,
+      email: updatedUser.email,
+      role: updatedUser.role,
+    }
   });
 });
 
@@ -214,6 +334,29 @@ export const getMyPatients = asyncHandler(async (req, res) => {
   );
 
   res.json(doctor.myPatients);
+});
+
+// @desc    Get all available doctors (for referral/selection)
+// @route   GET /api/users/doctors
+// @access  Private
+export const getDoctorsList = asyncHandler(async (req, res) => {
+  const doctors = await User.find({ role: "DOCTOR" })
+    .select("name email department specialization") // Add relevant fields
+    .sort({ name: 1 });
+
+  res.status(200).json(doctors);
+});
+
+// @desc    Get all patients (for appointment creation)
+// @route   GET /api/users/patients
+// @access  Private/Doctor
+export const getPatientsList = asyncHandler(async (req, res) => {
+  // If you want ALL patients in the system:
+  const patients = await User.find({ role: "PATIENT" })
+    .select("name email contactNumber")
+    .sort({ createdAt: -1 });
+
+  res.status(200).json(patients);
 });
 
 // @desc    Get patient's full medical status (Doctor, Appt, Meds)

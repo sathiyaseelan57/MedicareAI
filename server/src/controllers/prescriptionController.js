@@ -63,20 +63,22 @@ export const addPrescription = asyncHandler(async (req, res) => {
   res.status(201).json(prescription);
 });
 
-// @desc    Get the currently active prescription for the logged-in patient
+// @desc    Get active and historical prescriptions for patient
 // @route   GET /api/prescriptions/my-checklist
-// @access  Private/Patient
-export const getActivePrescription = asyncHandler(async (req, res) => {
-  const prescription = await Prescription.findOne({
+export const getMyPrescriptions = asyncHandler(async (req, res) => {
+  // 1. Get the current active one
+  const active = await Prescription.findOne({
     patient: req.user._id,
     isActive: true,
-  }).populate("doctor", "name");
+  }).populate("doctor", "name specialization").sort({ createdAt: -1 });
 
-  if (!prescription) {
-    return res.json({ message: "No active medications found", medicines: [] });
-  }
+  // 2. Get all others (History)
+  const history = await Prescription.find({
+    patient: req.user._id,
+    isActive: false,
+  }).populate("doctor", "name").sort({ createdAt: -1 });
 
-  res.json(prescription);
+  res.json({ active, history });
 });
 
 // @desc    Mark a medicine as taken for the day

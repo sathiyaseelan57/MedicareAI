@@ -1,8 +1,11 @@
 import express from "express";
 import {
+  addPatient,
   assignPatient,
   authUser,
+  getDoctorsList,
   getMyStatus,
+  getPatientsList,
   getUserProfile,
   logoutUser,
   registerUser,
@@ -19,6 +22,9 @@ router
   .get(protect, getUserProfile)
   .put(protect, updateUserProfile);
 router.get("/my-status", protect, getMyStatus);
+router.get("/patients", protect, getPatientsList);
+router.get("/doctors", protect, getDoctorsList);
+router.post("/add-patient", protect, addPatient);
 router.put("/assign-patient", protect, assignPatient);
 
 export default router;

@@ -18,8 +18,14 @@ const app = express();
 if (process.env.NODE_ENV === "development") {
   app.use(morgan("dev"));
 }
-
-app.use(cors());
+const corsOptions = {
+  origin: "http://localhost:5173", // Your exact frontend URL
+  credentials: true, // Essential for Cookies
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+  optionsSuccessStatus: 200, // Forces 200 instead of 204 (helps some browsers)
+};
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 

@@ -4,9 +4,10 @@ const medicineSchema = mongoose.Schema({
   name: { type: String, required: true },
   dosage: String, // e.g., "500mg" or "1 tablet"
   timing: {
-    type: String,
+    type: [String],
     enum: ["Morning", "Afternoon", "Evening", "Night"],
     required: true,
+    validate: [(v) => v.length > 0, "At least one timing is required"],
   },
   relationToFood: {
     type: String,
