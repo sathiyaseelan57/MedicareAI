@@ -6,6 +6,7 @@ import PatientProfile from "../models/PatientProfile.js";
 import DoctorProfile from "../models/DoctorProfile.js";
 import Appointment from "../models/Appointment.js";
 import Prescription from "../models/Prescription.js";
+import MedicationLog from "../models/MedicationLog.js";
 
 // @desc    Register a new user (Doctor or Patient)
 // @route   POST /api/users
@@ -394,5 +395,91 @@ export const getMyStatus = asyncHandler(async (req, res) => {
     doctor: patient.assignedDoctor || "No doctor assigned yet",
     appointment: todayAppointment || "No appointment today",
     prescription: activePrescription || "No active medications",
+  });
+});
+
+export const getPatientDashboard = asyncHandler(async (req, res) => {
+  const { date } = req.query;
+  const selectedDate = date ? new Date(date) : new Date();
+  selectedDate.setHours(0, 0, 0, 0);
+  
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+
+  // 1. Fetch data as usual
+  const lastAppointment = await Appointment.findOne({
+    patient: req.user._id,
+    status: "Completed",
+    followUpDate: { $exists: true }
+  }).sort({ appointmentDate: -1 }).populate("doctor", "name");
+
+  const activePrescriptions = await Prescription.find({
+    patient: req.user._id,
+    isActive: true,
+    startDate: { $lte: selectedDate },
+    $or: [{ endDate: null }, { endDate: { $gte: selectedDate } }]
+  }).populate("doctor", "name");
+
+  const actualLogs = await MedicationLog.find({
+    patient: req.user._id,
+    date: selectedDate
+  });
+
+  // 2. GENERATE VIRTUAL LOGS
+  // We combine actual database logs with "Calculated Missed" logs for the UI
+  const processedLogs = [];
+
+  activePrescriptions.forEach(presc => {
+    presc.medicines.forEach(med => {
+      med.timing.forEach(time => {
+        const existingLog = actualLogs.find(l => 
+          l.medicineName === med.name && l.timing === time
+        );
+
+        if (existingLog) {
+          processedLogs.push(existingLog);
+        } else if (selectedDate < now) {
+          // If the date has passed and there's no log, it's VIRTUAL MISSED
+          processedLogs.push({
+            medicineName: med.name,
+            timing: time,
+            status: "Missed",
+            date: selectedDate,
+            isVirtual: true // Flag for frontend
+          });
+        }
+      });
+    });
+  });
+
+  // 3. ADHERENCE CALCULATION (Fixed)
+  // Calculate total doses that SHOULD have been taken from startDate to YESTERDAY
+  let totalTaken = await MedicationLog.countDocuments({ 
+    patient: req.user._id, 
+    status: "Taken" 
+  });
+
+  let totalExpected = 0;
+  const allUserPrescriptions = await Prescription.find({ patient: req.user._id });
+
+  allUserPrescriptions.forEach(p => {
+    const start = new Date(p.startDate);
+    start.setHours(0,0,0,0);
+    
+    // We only count expected doses up to the current moment
+    const endCount = (p.endDate && p.endDate < now) ? p.endDate : now;
+    const diffDays = Math.max(0, Math.ceil((endCount - start) / (1000 * 60 * 60 * 24)));
+    
+    p.medicines.forEach(m => {
+      totalExpected += (m.timing.length * diffDays);
+    });
+  });
+
+  res.json({
+    nextFollowUp: lastAppointment ? lastAppointment.followUpDate : null,
+    assignedDoctor: lastAppointment ? lastAppointment.doctor : null,
+    activePrescriptions,
+    logs: processedLogs, // Send the combined actual + virtual logs
+    adherenceScore: totalExpected > 0 ? Math.round((totalTaken / totalExpected) * 100) : 100
   });
 });

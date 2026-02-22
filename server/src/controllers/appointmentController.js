@@ -195,15 +195,24 @@ export const completeConsultation = asyncHandler(async (req, res) => {
     throw new Error("Appointment not found");
   }
 
-  // 1. Save Prescription
+  // 1. Manage Prescription Status & Creation
   let savedPrescription = null;
   if (medicines && medicines.length > 0) {
+    
+    // STEP A: Deactivate all previous prescriptions for this patient
+    await Prescription.updateMany(
+      { patient: appointment.patient, isActive: true },
+      { $set: { isActive: false } }
+    );
+
+    // STEP B: Create the new prescription as the ONLY active one
     savedPrescription = await Prescription.create({
       patient: appointment.patient,
       doctor: appointment.doctor,
       appointment: appointment._id,
       medicines,
       startDate: new Date(),
+      isActive: true, // Explicitly set to true
     });
   }
 
@@ -213,11 +222,12 @@ export const completeConsultation = asyncHandler(async (req, res) => {
   appointment.notes = notes;
   appointment.vitalsAtVisit = vitalsAtVisit;
   appointment.followUpDate = followUpDate;
-  appointment.appointmentDate = new Date();
+  // Note: Keeping appointmentDate as the original scheduled date is usually better for records, 
+  // but if you want to record the actual "completion time", use a separate field like completedAt.
   if (savedPrescription) appointment.prescription = savedPrescription._id;
   await appointment.save();
 
-  // 3. Save Multiple Reports (Name, Status, and URL)
+  // 3. Save Multiple Reports
   if (reports && reports.length > 0) {
     const reportDocs = reports.map(rep => ({
       patient: appointment.patient,
@@ -226,12 +236,15 @@ export const completeConsultation = asyncHandler(async (req, res) => {
       reportName: rep.reportName,
       fileUrl: rep.fileUrl,
       publicId: rep.publicId,
-      status: "Analyzed" // Setting status as Analyzed since doctor is uploading during visit
+      status: "Analyzed" 
     }));
     await Report.insertMany(reportDocs);
   }
 
-  res.status(200).json({ message: "Consultation finalized successfully" });
+  res.status(200).json({ 
+    message: "Consultation finalized and medication updated",
+    prescriptionId: savedPrescription ? savedPrescription._id : null 
+  });
 });
 
 // @desc    Update appointment status/notes (Doctor only)

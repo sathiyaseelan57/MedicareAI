@@ -8,6 +8,7 @@ import leaveRoutes from "./routes/leaveRoutes.js";
 import appointmentRoutes from "./routes/appointmentRoutes.js";
 import prescriptionRoutes from "./routes/prescriptionRoutes.js";
 import aiRoutes from "./routes/aiRoutes.js";
+import reportRoutes from "./routes/reportRoutes.js";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 
 dotenv.config();
@@ -34,6 +35,7 @@ app.use("/api/leaves", leaveRoutes);
 app.use("/api/appointments", appointmentRoutes);
 app.use("/api/prescriptions", prescriptionRoutes);
 app.use("/api/ai", aiRoutes);
+app.use("/api/reports", reportRoutes);
 
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "Server is healthy" });

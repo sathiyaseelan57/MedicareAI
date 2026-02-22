@@ -15,13 +15,9 @@ import AppointmentSummary from "./pages/AppointmentSummary";
 import PatientAppointments from "./pages/PatientAppointments";
 import Prescriptions from "./pages/Prescriptions";
 import Profile from "./pages/Profile";
+import PatientReports from "./pages/Reports";
+import PatientDashboard from "./pages/PatientDashboard";
 
-// Placeholder Components
-const PatientDashboard = () => (
-  <div className="p-4">
-    <h1>Patient Dashboard</h1>
-  </div>
-);
 const DoctorDashboard = () => (
   <div className="p-4">
     <h1>Doctor Dashboard</h1>
@@ -124,6 +120,7 @@ function App() {
           <Route path="/appointment/:id" element={<AppointmentSummary />} />
           <Route path="/prescriptions" element={<Prescriptions />} />
           <Route path="/patient-profile" element={<Profile />} />
+          <Route path="/reports" element={<PatientReports />} />
         </Route>
 
         <Route path="*" element={<NotFound />} />

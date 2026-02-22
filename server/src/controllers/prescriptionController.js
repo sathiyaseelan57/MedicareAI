@@ -85,36 +85,24 @@ export const getMyPrescriptions = asyncHandler(async (req, res) => {
 // @route   POST /api/prescriptions/log
 // @access  Private/Patient
 export const logMedication = asyncHandler(async (req, res) => {
-  const { prescriptionId, medicineName, timing } = req.body;
+  const { prescription, medicineName, date, timing, status } = req.body;
 
-  // Normalize "today" to midnight UTC-local by zeroing hours - keeps day semantics consistent.
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const logDate = new Date(date);
+  logDate.setHours(0, 0, 0, 0);
 
-  // Check if already logged for today to prevent double entries
-  const existingLog = await MedicationLog.findOne({
-    patient: req.user._id,
-    prescription: prescriptionId,
-    medicineName,
-    date: today,
-    timing,
-  });
+  const log = await MedicationLog.findOneAndUpdate(
+    {
+      patient: req.user._id,
+      prescription,
+      medicineName,
+      date: logDate,
+      timing
+    },
+    { status: status || "Taken" },
+    { upsert: true, new: true }
+  );
 
-  if (existingLog) {
-    res.status(400);
-    throw new Error("Already marked as taken for this timing");
-  }
-
-  const log = await MedicationLog.create({
-    patient: req.user._id,
-    prescription: prescriptionId,
-    medicineName,
-    date: today,
-    timing,
-    status: "Taken",
-  });
-
-  res.status(201).json(log);
+  res.status(200).json(log);
 });
 
 // @desc    Calculate medication adherence percentage for the last N days (default 7)
@@ -166,3 +154,4 @@ export const getAdherenceScore = asyncHandler(async (req, res) => {
     status: adherenceRate >= 80 ? "Good" : "Needs Attention",
   });
 });
+

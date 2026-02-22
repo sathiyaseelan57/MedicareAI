@@ -5,6 +5,7 @@ import {
   authUser,
   getDoctorsList,
   getMyStatus,
+  getPatientDashboard,
   getPatientsList,
   getUserProfile,
   logoutUser,
@@ -21,6 +22,8 @@ router
   .route("/profile")
   .get(protect, getUserProfile)
   .put(protect, updateUserProfile);
+
+router.get("/patient-dashboard", protect, getPatientDashboard);
 router.get("/my-status", protect, getMyStatus);
 router.get("/patients", protect, getPatientsList);
 router.get("/doctors", protect, getDoctorsList);
