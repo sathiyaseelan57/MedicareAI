@@ -195,39 +195,48 @@ export const completeConsultation = asyncHandler(async (req, res) => {
     throw new Error("Appointment not found");
   }
 
-  // 1. Manage Prescription Status & Creation
+  // 1. Calculate the Prescription End Date
+  // We take the medicine with the longest duration to set the overall expiry
+  let maxDuration = 0;
+  if (medicines && medicines.length > 0) {
+    maxDuration = Math.max(...medicines.map(m => m.durationDays || 0));
+  }
+
+  const startDate = new Date();
+  const endDate = new Date();
+  endDate.setDate(startDate.getDate() + maxDuration);
+
+  // 2. Manage Prescription Status
   let savedPrescription = null;
   if (medicines && medicines.length > 0) {
-    
-    // STEP A: Deactivate all previous prescriptions for this patient
+    // Deactivate old meds
     await Prescription.updateMany(
       { patient: appointment.patient, isActive: true },
       { $set: { isActive: false } }
     );
 
-    // STEP B: Create the new prescription as the ONLY active one
+    // Create new active prescription
     savedPrescription = await Prescription.create({
       patient: appointment.patient,
       doctor: appointment.doctor,
       appointment: appointment._id,
       medicines,
-      startDate: new Date(),
-      isActive: true, // Explicitly set to true
+      startDate,
+      endDate: followUpDate ? new Date(followUpDate) : endDate, // Use follow-up or max duration
+      isActive: true,
     });
   }
 
-  // 2. Update Appointment
+  // 3. Update Appointment
   appointment.status = "Completed";
   appointment.diagnosis = diagnosis;
   appointment.notes = notes;
   appointment.vitalsAtVisit = vitalsAtVisit;
   appointment.followUpDate = followUpDate;
-  // Note: Keeping appointmentDate as the original scheduled date is usually better for records, 
-  // but if you want to record the actual "completion time", use a separate field like completedAt.
   if (savedPrescription) appointment.prescription = savedPrescription._id;
   await appointment.save();
 
-  // 3. Save Multiple Reports
+  // 4. Handle Reports
   if (reports && reports.length > 0) {
     const reportDocs = reports.map(rep => ({
       patient: appointment.patient,
@@ -241,10 +250,7 @@ export const completeConsultation = asyncHandler(async (req, res) => {
     await Report.insertMany(reportDocs);
   }
 
-  res.status(200).json({ 
-    message: "Consultation finalized and medication updated",
-    prescriptionId: savedPrescription ? savedPrescription._id : null 
-  });
+  res.status(200).json({ message: "Consultation finalized. Prescription active until follow-up." });
 });
 
 // @desc    Update appointment status/notes (Doctor only)
@@ -270,35 +276,6 @@ export const updateAppointmentStatus = asyncHandler(async (req, res) => {
 
   const updatedAppointment = await appointment.save();
   res.json(updatedAppointment);
-});
-
-// @desc    Get doctor dashboard - restricted to doctors
-// @route   GET /api/appointments/dashboard
-// @access  Private/Doctor
-export const getDoctorDashboard = asyncHandler(async (req, res) => {
-  if (req.user.role !== "DOCTOR") {
-    res.status(403);
-    throw new Error("Not authorized");
-  }
-
-  const doctorId = req.user._id;
-
-  // Today's range
-  const startOfToday = new Date();
-  startOfToday.setHours(0, 0, 0, 0);
-  const endOfToday = new Date();
-  endOfToday.setHours(23, 59, 59, 999);
-
-  const todaysAppointments = await Appointment.find({
-    doctor: doctorId,
-    appointmentDate: { $gte: startOfToday, $lte: endOfToday },
-  }).populate("patient", "name email");
-
-  res.json({
-    date: startOfToday,
-    count: todaysAppointments.length,
-    appointments: todaysAppointments,
-  });
 });
 
 // @desc    Get appointments within a specific date range (Doctor only)

@@ -17,12 +17,9 @@ import Prescriptions from "./pages/Prescriptions";
 import Profile from "./pages/Profile";
 import PatientReports from "./pages/Reports";
 import PatientDashboard from "./pages/PatientDashboard";
+import DoctorDashboard from "./pages/DoctorDashboard";
+import PatientDetails from "./pages/PatientDetails";
 
-const DoctorDashboard = () => (
-  <div className="p-4">
-    <h1>Doctor Dashboard</h1>
-  </div>
-);
 const NotFound = () => (
   <div className="p-8 text-center">
     <h1>404 - Page Not Found</h1>
@@ -111,6 +108,7 @@ function App() {
           <Route path="/appointments" element={<Appointments />} />
           <Route path="/clinical-visit/:id" element={<ClinicalVisit />} />
           <Route path="/doctor-profile" element={<Profile />} />
+          <Route path="/patient-details/:id" element={<PatientDetails />} />
         </Route>
 
         {/* --- PATIENT ONLY ROUTES --- */}

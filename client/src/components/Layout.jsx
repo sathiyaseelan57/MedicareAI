@@ -31,7 +31,7 @@ const Layout = () => {
     setTheme(newTheme);
     document.documentElement.setAttribute("data-theme", newTheme);
     localStorage.setItem("app-theme", newTheme);
-  };
+  }; // This is a comment
 
   const navLinks =
     user?.role === "DOCTOR"

@@ -11,8 +11,9 @@ import {
   logoutUser,
   registerUser,
   updateUserProfile,
+  getDoctorDashboard
 } from "../controllers/userController.js";
-import { protect } from "../middleware/authMiddleware.js";
+import { doctor, protect } from "../middleware/authMiddleware.js";
 const router = express.Router();
 
 router.post("/", registerUser);
@@ -24,6 +25,7 @@ router
   .put(protect, updateUserProfile);
 
 router.get("/patient-dashboard", protect, getPatientDashboard);
+router.get("/doctor-dashboard", protect, doctor, getDoctorDashboard);
 router.get("/my-status", protect, getMyStatus);
 router.get("/patients", protect, getPatientsList);
 router.get("/doctors", protect, getDoctorsList);

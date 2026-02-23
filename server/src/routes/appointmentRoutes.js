@@ -3,7 +3,6 @@ import { protect, doctor } from "../middleware/authMiddleware.js";
 import {
   bookAppointment,
   getAppointmentsByRange,
-  getDoctorDashboard,
   getMyAppointments,
   updateAppointmentStatus,
   cancelAppointment,
@@ -18,9 +17,6 @@ const router = express.Router();
 // Specific route for the logged-in user's list (Patient or Doctor)
 // This MUST stay above any "/:id" routes
 router.get("/my-appointments", protect, getMyAppointments);
-
-// Doctor specific dashboard stats
-router.get("/dashboard", protect, doctor, getDoctorDashboard);
 
 // Base route: POST to book, GET for range-based search (Doctor only)
 router

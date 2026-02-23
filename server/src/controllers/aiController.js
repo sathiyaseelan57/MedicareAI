@@ -1,72 +1,72 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import User from "../models/User.js";
-import Report from "../models/Report.js";
+import PatientProfile from "../models/PatientProfile.js";
+import Appointment from "../models/Appointment.js";
 import Prescription from "../models/Prescription.js";
+import MedicationLog from "../models/MedicationLog.js";
+import asyncHandler from "express-async-handler";
 
+console.log("Gemini Key Loaded:", process.env.GEMINI_API_KEY);
 // Initialize Gemini
-// Ensure GEMINI_API_KEY is in your .env file
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-export const askMedicalAI = async (req, res) => {
+export const getPatientFullDetails = asyncHandler(async (req, res) => {
+  const { patientId } = req.params;
+
+  // 1. Fetch Core Data
+  const [patientUser, profile, appointments, prescriptions, logs] = await Promise.all([
+    User.findById(patientId).select("-password"),
+    PatientProfile.findOne({ user: patientId }).populate('assignedWard'),
+    Appointment.find({ patient: patientId }).sort({ appointmentDate: -1 }).populate('doctor', 'name'),
+    Prescription.find({ patient: patientId }).sort({ createdAt: -1 }),
+    MedicationLog.find({ 
+      patient: patientId, 
+      date: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } 
+    })
+  ]);
+
+  if (!patientUser) return res.status(404).json({ message: "Patient not found" });
+
+  // 2. Calculate Adherence
+  const taken = logs.filter(l => l.status === 'TAKEN').length;
+  const adherenceRate = logs.length > 0 ? Math.round((taken / logs.length) * 100) : 0;
+
+  // 3. REAL GEMINI INTEGRATION
+  let aiSummary = "Summary unavailable.";
   try {
-    const { prompt, mode } = req.body;
-    const userId = req.user._id; // Taken from protect middleware
-
-    // 1. Fetch Patient Context in Parallel for speed
-    const [user, reports, prescriptions] = await Promise.all([
-      User.findById(userId).select("name allergies medicalConditions"),
-      Report.find({ patientId: userId }).sort({ createdAt: -1 }).limit(3),
-      Prescription.find({ patientId: userId, isActive: true }),
-    ]);
-
-    if (!user) {
-      return res.status(404).json({ message: "User context not found" });
-    }
-
-    // 2. Format Context into a clean string for the AI
-    const medicalContext = `
-      Patient Name: ${user.name}
-      Known Allergies: ${user.allergies?.join(", ") || "None reported"}
-      Medical Conditions: ${
-        user.medicalConditions?.join(", ") || "None reported"
-      }
-      Current Medications: ${
-        prescriptions
-          .map((p) => p.medicines.map((m) => m.name).join(", "))
-          .join(" | ") || "No active prescriptions"
-      }
-      Recent Lab Reports: ${
-        reports.map((r) => r.category).join(", ") || "No reports uploaded"
-      }
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    
+    const prompt = `
+      You are a medical AI assistant. Summarize this patient's status for a doctor:
+      Patient: ${patientUser.name}, ${profile?.age}yo ${profile?.gender}.
+      History: ${profile?.medicalHistory?.map(h => h.condition).join(", ") || "None"}.
+      Medications: ${profile?.currentMedications?.map(m => m.name).join(", ") || "None"}.
+      Adherence: ${adherenceRate}% in the last 30 days.
+      Recent Appointments: ${appointments.slice(0, 2).map(a => a.reason).join("; ")}.
+      
+      Provide a concise 3-sentence summary: 1. Current Status, 2. Adherence/Risk, 3. Recommended Focus for today's visit.
     `;
 
-    // 3. Define AI Personality based on 'mode'
-    const systemInstruction =
-      mode === "doctor"
-        ? "You are a clinical assistant for doctors. Summarize patient data concisely, highlighting risks and adherence issues."
-        : "You are a friendly medical assistant. Use simple language. Always advise consulting a doctor for final decisions.";
-
-    // 4. Initialize Model (1.5-flash is best for speed/cost)
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      systemInstruction: systemInstruction,
-    });
-
-    // 5. Generate Content
-    const fullPrompt = `Context: ${medicalContext}\n\nUser Question: ${prompt}`;
-    const result = await model.generateContent(fullPrompt);
-    const response = await result.response;
-    const text = response.text();
-
-    res.status(200).json({
-      success: true,
-      answer: text,
-    });
+    const result = await model.generateContent(prompt);
+    aiSummary = result.response.text();
   } catch (error) {
-    console.error("Gemini AI Error:", error.message);
-    res.status(500).json({
-      success: false,
-      message: "AI service is currently unavailable. Please try again later.",
-    });
+    console.error("Gemini Error:", error);
+    aiSummary = "AI service temporarily unavailable for summarization.";
   }
-};
+
+  // 4. Send Response
+  res.json({
+    basicDetails: {
+      ...patientUser._doc,
+      ...profile?._doc,
+    },
+    adherenceRate,
+    aiSummary,
+    appointments,
+    prescriptions: {
+      active: prescriptions.filter(p => p.isActive),
+      history: prescriptions.filter(p => !p.isActive)
+    },
+    reports: profile?.medicalHistory || []
+  });
+});
