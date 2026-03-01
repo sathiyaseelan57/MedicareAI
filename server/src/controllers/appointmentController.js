@@ -19,99 +19,63 @@ export const bookAppointment = asyncHandler(async (req, res) => {
     medicines,
   } = req.body;
 
-  // Normalize appointment date
   const apptDate = appointmentDate ? new Date(appointmentDate) : new Date();
   if (isNaN(apptDate.getTime())) {
     res.status(400);
     throw new Error("Invalid appointment date");
   }
 
-  // If a patient is booking
+  let finalPatientId;
+  let finalDoctorId;
+
+  // Role-based logic to determine participants
   if (req.user.role === "PATIENT") {
-    // Ensure doctorId provided
-    if (!doctorId) {
+    finalPatientId = req.user._id;
+    finalDoctorId = doctorId; // Passed from frontend (their assigned doctor)
+  } else if (req.user.role === "ADMIN" || req.user.role === "DOCTOR") {
+    if (!patientId || !doctorId) {
       res.status(400);
-      throw new Error("Please provide a doctorId");
+      throw new Error("Admin/Doctor must provide both patientId and doctorId");
     }
-
-    const doctor = await User.findById(doctorId);
-    if (!doctor || doctor.role !== "DOCTOR") {
-      res.status(400);
-      throw new Error("Invalid doctorId");
-    }
-
-    // Prevent same user as doctor and patient
-    if (String(req.user._id) === String(doctor._id)) {
-      res.status(400);
-      throw new Error("Doctor and patient cannot be the same user");
-    }
-
-    // In your backend bookAppointment controller
-    const appointment = await Appointment.create({
-      patient: patientId || req.user._id,
-      doctor: doctorId,
-      appointmentDate: apptDate,
-      status: "Scheduled",
-      reason: reason,
-      referredBy: req.user.role === "DOCTOR" ? req.user._id : null, // Tracks who made the booking
-    });
-
-    res.status(201).json(appointment);
-    return;
+    finalPatientId = patientId;
+    finalDoctorId = doctorId;
+  } else {
+    res.status(403);
+    throw new Error("Unauthorized to book appointments");
   }
 
-  // If a doctor is creating the appointment (on behalf of a patient)
-  if (req.user.role === "DOCTOR") {
-    if (!patientId) {
-      res.status(400);
-      throw new Error("Please provide a patientId");
-    }
+  // Validation: Check if doctor exists
+  const doctor = await User.findById(finalDoctorId);
+  if (!doctor || doctor.role !== "DOCTOR") {
+    res.status(400);
+    throw new Error("Valid Doctor ID is required");
+  }
 
-    const patient = await User.findById(patientId);
-    if (!patient || patient.role !== "PATIENT") {
-      res.status(400);
-      throw new Error("Invalid patientId");
-    }
+  const appointment = await Appointment.create({
+    patient: finalPatientId,
+    doctor: finalDoctorId,
+    appointmentDate: apptDate,
+    status: "Scheduled",
+    reason: reason || "Standard Consultation",
+    referredBy: req.user._id, // Track who created the record
+  });
 
-    // Prevent same user
-    if (String(req.user._id) === String(patient._id)) {
-      res.status(400);
-      throw new Error("Doctor and patient cannot be the same user");
-    }
-
-    const appointment = await Appointment.create({
-      patient: patient._id,
+  // Handle Prescription (Doctor only)
+  if (req.user.role === "DOCTOR" && medicines?.length > 0) {
+    await Prescription.updateMany(
+      { patient: finalPatientId, isActive: true },
+      { isActive: false }
+    );
+    await Prescription.create({
+      patient: finalPatientId,
       doctor: req.user._id,
-      appointmentDate: apptDate,
-      status: "Scheduled", // doctor-submitted visit often completed immediately
-      reason: reason || "First Consultation / Walk-in",
+      appointment: appointment._id,
+      medicines,
+      isActive: true,
     });
-
-    // If medicines provided, create prescription and deactivate previous ones
-    if (medicines && medicines.length > 0) {
-      await Prescription.updateMany(
-        { patient: patient._id, isActive: true },
-        { isActive: false }
-      );
-
-      await Prescription.create({
-        patient: patient._id,
-        doctor: req.user._id,
-        appointment: appointment._id,
-        medicines,
-        isActive: true,
-      });
-    }
-
-    res.status(201).json({
-      message: "Visit recorded successfully",
-      appointment,
-    });
-    return;
   }
 
-  res.status(403);
-  throw new Error("Only patients or doctors can book appointments");
+  res.status(201).json(appointment);
 });
 
 // @desc    Get single appointment details
