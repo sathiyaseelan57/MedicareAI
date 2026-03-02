@@ -77,31 +77,31 @@ export const addPatient = asyncHandler(async (req, res) => {
     emergencyContact,
     allergies,
     currentMedications,
+    doctorId, // <--- Add this
   } = req.body;
 
   // 1. Validation
+  if (!doctorId) {
+    res.status(400);
+    throw new Error("Please select an assigned doctor");
+  }
+
   const userExists = await User.findOne({ email });
   if (userExists) {
     res.status(400);
     throw new Error("User with this email already exists");
   }
 
-  // 2. Create the User Account (Role: PATIENT)
-  // We assign the doctor's ID (from req.user) to the patient's assignedDoctor field
+  // 2. Create the User Account
   const patientUser = await User.create({
     name,
     email,
-    password, // This will be hashed automatically by your pre-save hook
+    password,
     role: "PATIENT",
-    assignedDoctor: req.user._id,
+    assignedDoctor: doctorId, // Use the ID from the dropdown
   });
 
-  if (!patientUser) {
-    res.status(400);
-    throw new Error("Invalid patient user data");
-  }
-
-  // 3. Create the Patient Profile (Clinical Data)
+  // 3. Create the Patient Profile
   const patientProfile = await PatientProfile.create({
     user: patientUser._id,
     age,
@@ -116,15 +116,14 @@ export const addPatient = asyncHandler(async (req, res) => {
     currentMedications,
   });
 
-  // 4. Link the Patient to the Doctor's "myPatients" list
-  await User.findByIdAndUpdate(req.user._id, {
+  // 4. Link to the SELECTED Doctor's list (not req.user)
+  await User.findByIdAndUpdate(doctorId, {
     $push: { myPatients: patientUser._id },
   });
 
   if (patientProfile) {
     res.status(201).json({
       success: true,
-      message: "Patient registered and profile created successfully",
       data: {
         _id: patientUser._id,
         name: patientUser.name,
@@ -133,10 +132,9 @@ export const addPatient = asyncHandler(async (req, res) => {
       },
     });
   } else {
-    // Cleanup: If profile fails, remove the created user to prevent "ghost" accounts
     await User.findByIdAndDelete(patientUser._id);
     res.status(400);
-    throw new Error("Failed to create patient medical profile");
+    throw new Error("Failed to create profile");
   }
 });
 
@@ -144,39 +142,52 @@ export const addPatient = asyncHandler(async (req, res) => {
 // @route   POST /api/users/login
 // @access  Public
 export const authUser = asyncHandler(async (req, res) => {
-  const { loginId, password, role } = req.body;
+  const { loginId, password, role, secretCode } = req.body;
 
   let authenticatedUser = null;
 
-  // 1. Logic for DOCTOR (Direct check on User collection)
+  // 1. Logic for DOCTOR
   if (role === "DOCTOR") {
     const user = await User.findOne({ email: loginId }).select("+password");
-
     if (user && (await user.matchPassword(password))) {
       authenticatedUser = user;
     }
   }
 
-  // 2. Logic for PATIENT (Check Profile first, then User)
+  // 2. Logic for PATIENT
   else if (role === "PATIENT") {
-    // Find the profile by MRN
     const profile = await PatientProfile.findOne({
       medicalRecordNumber: loginId,
     });
-
     if (profile) {
-      // Find the associated User object using the ID stored in the profile
-      // Assuming your profile field is called 'user' or 'userId'
       const user = await User.findById(profile.user).select("+password");
-
       if (user && (await user.matchPassword(password))) {
         authenticatedUser = user;
       }
     }
   }
 
-  // 3. Final Verification and Response
+  // 3. Logic for STATIC ADMIN (Checked against .env only)
+  else if (role === "ADMIN") {
+    const isNameValid = loginId === process.env.ADMIN_USERNAME;
+    const isPassValid = password === process.env.ADMIN_PASSWORD;
+    const isSecretValid = secretCode === process.env.ADMIN_SECRET_CODE;
+
+    if (isNameValid && isPassValid && isSecretValid) {
+      // We create a "mock" user object to pass to the token generator
+      // This ID is hardcoded since this user isn't in the DB
+      authenticatedUser = {
+        _id: "admin_001",
+        name: "System Administrator",
+        email: process.env.ADMIN_USERNAME,
+        role: "ADMIN",
+      };
+    }
+  }
+
+  // 4. Final Verification and Response
   if (authenticatedUser) {
+    // Generate token for the admin using the static ID
     generateToken(res, authenticatedUser._id);
 
     res.json({
@@ -184,14 +195,11 @@ export const authUser = asyncHandler(async (req, res) => {
       name: authenticatedUser.name,
       email: authenticatedUser.email,
       role: authenticatedUser.role,
-      // You can also send the MRN back if needed
       mrn: role === "PATIENT" ? loginId : null,
     });
   } else {
     res.status(401);
-    throw new Error(
-      "Invalid credentials. Please check your MRN/Email and Password."
-    );
+    throw new Error("Invalid credentials. Please check your inputs.");
   }
 });
 
@@ -207,29 +215,43 @@ export const logoutUser = (req, res) => {
 };
 
 export const getUserProfile = asyncHandler(async (req, res) => {
+  // 1. Handle STATIC ADMIN check first
+  if (req.user._id === "admin_001" || req.user.role === "ADMIN") {
+    return res.json({
+      user: {
+        _id: "admin_001",
+        name: "System Administrator",
+        email: process.env.ADMIN_USERNAME,
+        role: "ADMIN",
+      },
+      isAdmin: true,
+    });
+  }
+
   let profileData = null;
 
+  // 2. Logic for DOCTOR
   if (req.user.role === "DOCTOR") {
     profileData = await DoctorProfile.findOne({ user: req.user._id }).populate(
       "user",
       "name email role"
     );
-  } else if (req.user.role === "PATIENT") {
+  }
+  // 3. Logic for PATIENT
+  else if (req.user.role === "PATIENT") {
     profileData = await PatientProfile.findOne({ user: req.user._id }).populate(
       "user",
       "name email role"
     );
   }
 
-  // If profile doc doesn't exist yet, return basic user info
-  // so the user can still see the page and create their profile
+  // 4. Fallback: If profile doc doesn't exist yet, return basic user info
   if (!profileData) {
     const user = await User.findById(req.user._id).select("-password");
     if (!user) {
       res.status(404);
       throw new Error("User not found");
     }
-    // Return a consistent structure
     return res.json({ user, isNewProfile: true });
   }
 
@@ -526,19 +548,19 @@ export const getDoctorDashboard = asyncHandler(async (req, res) => {
   const upcomingAppointments = await Appointment.find({
     doctor: doctorId,
     status: "Scheduled",
-    appointmentDate: { $gte: now }
+    appointmentDate: { $gte: now },
   })
-  .sort({ appointmentDate: 1, appointmentTime: 1 })
-  .limit(6)
-  .populate({
-    path: "patient",
-    select: "name email",
-    populate: {
-      path: "patientProfile", // Ensure you have a virtual or ref named this in User model, 
-      model: "PatientProfile", // or we manually fetch below if not linked
-      select: "age gender currentStatus"
-    }
-  });
+    .sort({ appointmentDate: 1, appointmentTime: 1 })
+    .limit(6)
+    .populate({
+      path: "patient",
+      select: "name email",
+      populate: {
+        path: "patientProfile", // Ensure you have a virtual or ref named this in User model,
+        model: "PatientProfile", // or we manually fetch below if not linked
+        select: "age gender currentStatus",
+      },
+    });
 
   // 3. Statistical Aggregation
   const [pending, completed] = await Promise.all([
@@ -549,21 +571,21 @@ export const getDoctorDashboard = asyncHandler(async (req, res) => {
   // 4. Fetch Detailed Patient List from Doctor's 'myPatients' array
   // We fetch the PatientProfile directly linked to those users
   const patientProfiles = await PatientProfile.find({
-    user: { $in: doctorUser.myPatients }
+    user: { $in: doctorUser.myPatients },
   })
-  .populate("user", "name email createdAt")
-  .sort({ createdAt: -1 })
-  .limit(8);
+    .populate("user", "name email createdAt")
+    .sort({ createdAt: -1 })
+    .limit(8);
 
   // 5. Clean Data for UI
-  const cleanedPatients = patientProfiles.map(profile => ({
+  const cleanedPatients = patientProfiles.map((profile) => ({
     _id: profile.user?._id,
     name: profile.user?.name || "New Patient",
     email: profile.user?.email || "No Email",
     gender: profile.gender || "Not Specified",
     age: profile.age || "—",
     currentStatus: profile.currentStatus?.replace("_", " "),
-    createdAt: profile.user?.createdAt
+    createdAt: profile.user?.createdAt,
   }));
 
   res.json({
@@ -573,7 +595,7 @@ export const getDoctorDashboard = asyncHandler(async (req, res) => {
       totalUniquePatients: doctorUser.myPatients.length,
     },
     appointments: upcomingAppointments,
-    patients: cleanedPatients
+    patients: cleanedPatients,
   });
 });
 
@@ -587,17 +609,20 @@ export const getPatientFullDetails = asyncHandler(async (req, res) => {
     throw new Error("Patient not found");
   }
 
-  const profile = await PatientProfile.findOne({ user: patientId })
-    .populate('assignedWard', 'name floor');
+  const profile = await PatientProfile.findOne({ user: patientId }).populate(
+    "assignedWard",
+    "name floor"
+  );
 
   // 2. Fetch Appointments (Descending)
   const appointments = await Appointment.find({ patient: patientId })
     .sort({ appointmentDate: -1, appointmentTime: -1 })
-    .populate('doctor', 'name specialization');
+    .populate("doctor", "name specialization");
 
   // 3. Fetch Prescriptions (Active vs Older)
-  const prescriptions = await Prescription.find({ patient: patientId })
-    .sort({ createdAt: -1 });
+  const prescriptions = await Prescription.find({ patient: patientId }).sort({
+    createdAt: -1,
+  });
 
   // 4. Calculate Medication Adherence Log
   // We look at the last 30 days of logs
@@ -606,30 +631,44 @@ export const getPatientFullDetails = asyncHandler(async (req, res) => {
 
   const logs = await MedicationLog.find({
     patient: patientId,
-    date: { $gte: thirtyDaysAgo }
+    date: { $gte: thirtyDaysAgo },
   });
 
   const totalPossibleDoses = logs.length;
-  const takenDoses = logs.filter(log => log.status === 'TAKEN').length;
-  const adherencePercentage = totalPossibleDoses > 0 
-    ? Math.round((takenDoses / totalPossibleDoses) * 100) 
-    : 0;
+  const takenDoses = logs.filter((log) => log.status === "TAKEN").length;
+  const adherencePercentage =
+    totalPossibleDoses > 0
+      ? Math.round((takenDoses / totalPossibleDoses) * 100)
+      : 0;
 
   // 5. AI Summarization Logic (Placeholder)
   // Constructing a prompt for AI
   const summaryPrompt = `
-    Patient Name: ${patientUser.name}, Age: ${profile?.age}, Gender: ${profile?.gender}.
-    Medical History: ${profile?.medicalHistory?.map(h => h.condition).join(", ") || 'None'}.
-    Recent Appointments: ${appointments.slice(0, 3).map(a => a.reason).join(", ")}.
-    Current Medications: ${profile?.currentMedications?.map(m => m.name).join(", ") || 'None'}.
+    Patient Name: ${patientUser.name}, Age: ${profile?.age}, Gender: ${
+    profile?.gender
+  }.
+    Medical History: ${
+      profile?.medicalHistory?.map((h) => h.condition).join(", ") || "None"
+    }.
+    Recent Appointments: ${appointments
+      .slice(0, 3)
+      .map((a) => a.reason)
+      .join(", ")}.
+    Current Medications: ${
+      profile?.currentMedications?.map((m) => m.name).join(", ") || "None"
+    }.
     Adherence: ${adherencePercentage}%.
     Please provide a 3-sentence clinical summary and risk assessment.
   `;
 
-  // For now, we return a simulated AI response. 
+  // For now, we return a simulated AI response.
   // You can replace this with: const aiSummary = await genAI.generate(summaryPrompt);
-  const aiSummary = profile 
-    ? `Patient is a ${profile.age}-year-old ${profile.gender} with a history of ${profile.medicalHistory[0]?.condition || 'general checkups'}. Clinical adherence is currently at ${adherencePercentage}%. Recent visits suggest stable progression, but medication compliance should be monitored.`
+  const aiSummary = profile
+    ? `Patient is a ${profile.age}-year-old ${
+        profile.gender
+      } with a history of ${
+        profile.medicalHistory[0]?.condition || "general checkups"
+      }. Clinical adherence is currently at ${adherencePercentage}%. Recent visits suggest stable progression, but medication compliance should be monitored.`
     : "No sufficient data for AI summarization.";
 
   res.json({
@@ -637,18 +676,18 @@ export const getPatientFullDetails = asyncHandler(async (req, res) => {
       name: patientUser.name,
       email: patientUser.email,
       role: patientUser.role,
-      ...profile?._doc // Spreads age, gender, bloodGroup, allergies, etc.
+      ...profile?._doc, // Spreads age, gender, bloodGroup, allergies, etc.
     },
     stats: {
       adherencePercentage,
-      totalVisits: appointments.length
+      totalVisits: appointments.length,
     },
     aiSummary,
     appointments,
     prescriptions: {
-      active: prescriptions.filter(p => p.isActive),
-      history: prescriptions.filter(p => !p.isActive)
+      active: prescriptions.filter((p) => p.isActive),
+      history: prescriptions.filter((p) => !p.isActive),
     },
-    reports: profile?.medicalHistory || [] // Or a separate Reports collection if you have one
+    reports: profile?.medicalHistory || [], // Or a separate Reports collection if you have one
   });
 });

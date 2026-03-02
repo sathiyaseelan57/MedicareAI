@@ -1,13 +1,14 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { useAuthStore } from "./store/useAuthStore";
-import { useEffect } from "react";
+import { useEffect, border } from "react";
 
 // Components & Pages
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import AddPatient from "./pages/AddPatient";
+import AdminDashboard from "./pages/AdminDashboard";
 import Appointments from "./pages/Appointments";
 import CreateAppointment from "./pages/CreateAppointment";
 import ClinicalVisit from "./pages/ClinicalVisit";
@@ -21,18 +22,33 @@ import DoctorDashboard from "./pages/DoctorDashboard";
 import PatientDetails from "./pages/PatientDetails";
 
 const NotFound = () => (
-  <div className="p-8 text-center">
-    <h1>404 - Page Not Found</h1>
+  <div className="flex h-screen flex-col items-center justify-center bg-base-200">
+    <h1 className="text-4xl font-black text-primary">404</h1>
+    <p className="text-sm opacity-50 uppercase font-bold tracking-widest">
+      Page Not Found
+    </p>
+    <button
+      onClick={() => window.history.back()}
+      className="btn btn-ghost mt-4"
+    >
+      Go Back
+    </button>
   </div>
 );
 
 // --- PROTECTED ROUTE WRAPPER ---
-const ProtectedRoute = ({ allowedRole }) => {
+// Accepts an array of roles e.g., ["ADMIN", "DOCTOR"]
+const ProtectedRoute = ({ allowedRoles }) => {
   const { user, isAuthenticated } = useAuthStore();
+
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (allowedRole && user?.role !== allowedRole)
+
+  // Check if the user's role exists in the allowedRoles array
+  if (allowedRoles && !allowedRoles.includes(user?.role)) {
     return <Navigate to="/" replace />;
-  return <Layout />; // This renders the shell for all sub-routes
+  }
+
+  return <Layout />; // Renders the Sidebar/Navbar shell
 };
 
 // --- PUBLIC ROUTE WRAPPER ---
@@ -52,22 +68,39 @@ function App() {
   if (isCheckingAuth) {
     return (
       <div className="flex h-screen items-center justify-center bg-base-200">
-        <span className="loading loading-spinner loading-lg text-primary"></span>
+        <span className="loading loading-infinity loading-lg text-primary"></span>
       </div>
     );
   }
 
   return (
     <BrowserRouter>
-      <Toaster position="top-center" reverseOrder={false} />
+      <Toaster
+        position="top-center"
+        toastOptions={{
+          style: {
+            borderRadius: "1rem",
+            background: "#1f2937",
+            color: "#fff",
+            fontSize: "14px",
+            fontWeight: "bold",
+          },
+        }}
+      />
 
       <Routes>
-        {/* Root Logic */}
+        {/* --- ROOT REDIRECTION LOGIC --- */}
         <Route
           path="/"
           element={
-            !user ? (
+            isCheckingAuth ? (
+              <div className="flex h-screen items-center justify-center bg-base-200">
+                <span className="loading loading-infinity loading-lg text-primary"></span>
+              </div>
+            ) : !user ? (
               <Navigate to="/login" replace />
+            ) : user.role === "ADMIN" ? (
+              <Navigate to="/admin-dashboard" replace />
             ) : user.role === "DOCTOR" ? (
               <Navigate to="/doctor-dashboard" replace />
             ) : (
@@ -76,7 +109,7 @@ function App() {
           }
         />
 
-        {/* Public Routes */}
+        {/* --- PUBLIC ACCESS --- */}
         <Route
           path="/login"
           element={
@@ -94,17 +127,20 @@ function App() {
           }
         />
 
-        {/* --- SHARED PROTECTED ROUTES (Both Doctor & Patient) --- */}
-        <Route
-          element={<ProtectedRoute allowedRoles={["DOCTOR", "PATIENT"]} />}
-        >
+        {/* --- ADMIN ONLY ROUTES --- */}
+        <Route element={<ProtectedRoute allowedRoles={["ADMIN"]} />}>
+          <Route path="/admin-dashboard" element={<AdminDashboard />} />
+          <Route path="/add-patient" element={<AddPatient />} />
+        </Route>
+
+        {/* --- DOCTOR & ADMIN SHARED ACCESS --- */}
+        <Route element={<ProtectedRoute allowedRoles={["DOCTOR", "ADMIN"]} />}>
           <Route path="/appointments/create" element={<CreateAppointment />} />
         </Route>
 
         {/* --- DOCTOR ONLY ROUTES --- */}
-        <Route element={<ProtectedRoute allowedRole="DOCTOR" />}>
+        <Route element={<ProtectedRoute allowedRoles={["DOCTOR"]} />}>
           <Route path="/doctor-dashboard" element={<DoctorDashboard />} />
-          <Route path="/add-patient" element={<AddPatient />} />
           <Route path="/appointments" element={<Appointments />} />
           <Route path="/clinical-visit/:id" element={<ClinicalVisit />} />
           <Route path="/doctor-profile" element={<Profile />} />
@@ -112,7 +148,7 @@ function App() {
         </Route>
 
         {/* --- PATIENT ONLY ROUTES --- */}
-        <Route element={<ProtectedRoute allowedRole="PATIENT" />}>
+        <Route element={<ProtectedRoute allowedRoles={["PATIENT"]} />}>
           <Route path="/patient-dashboard" element={<PatientDashboard />} />
           <Route path="/view-appointments" element={<PatientAppointments />} />
           <Route path="/appointment/:id" element={<AppointmentSummary />} />
@@ -121,6 +157,7 @@ function App() {
           <Route path="/reports" element={<PatientReports />} />
         </Route>
 
+        {/* --- 404 CATCH-ALL --- */}
         <Route path="*" element={<NotFound />} />
       </Routes>
     </BrowserRouter>

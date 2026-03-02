@@ -16,6 +16,8 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   UserPlus,
+  Users,
+  UserCog,
 } from "lucide-react";
 
 const Layout = () => {
@@ -31,20 +33,45 @@ const Layout = () => {
     setTheme(newTheme);
     document.documentElement.setAttribute("data-theme", newTheme);
     localStorage.setItem("app-theme", newTheme);
-  }; // This is a comment
+  };
 
-  const navLinks =
-    user?.role === "DOCTOR"
-      ? [
+  // Define nav links based on roles
+  const getNavLinks = () => {
+    switch (user?.role) {
+      case "ADMIN":
+        return [
           {
             name: "Dashboard",
-            path: "/doctor-dashboard",
+            path: "/admin-dashboard",
             icon: <LayoutDashboard size={20} />,
           },
           {
             name: "Add Patient",
             path: "/add-patient",
             icon: <UserPlus size={20} />,
+          },
+          {
+            name: "Book Visit",
+            path: "/appointments/create",
+            icon: <UserPlus size={20} />,
+          },
+          {
+            name: "Patients",
+            path: "/admin-dashboard?tab=patients", // Using query params to trigger tabs in your dashboard
+            icon: <Users size={20} />,
+          },
+          {
+            name: "Doctors",
+            path: "/admin-dashboard?tab=doctors",
+            icon: <UserCog size={20} />,
+          },
+        ];
+      case "DOCTOR":
+        return [
+          {
+            name: "Dashboard",
+            path: "/doctor-dashboard",
+            icon: <LayoutDashboard size={20} />,
           },
           {
             name: "Appointments",
@@ -61,9 +88,15 @@ const Layout = () => {
             path: "/reports",
             icon: <ClipboardList size={20} />,
           },
-          { name: "Profile", path: "/doctor-profile", icon: <UserCircle size={20} /> },
-        ]
-      : [
+          {
+            name: "Profile",
+            path: "/doctor-profile",
+            icon: <UserCircle size={20} />,
+          },
+        ];
+      case "PATIENT":
+      default:
+        return [
           {
             name: "Dashboard",
             path: "/patient-dashboard",
@@ -89,8 +122,16 @@ const Layout = () => {
             path: "/reports",
             icon: <ClipboardList size={20} />,
           },
-          { name: "Profile", path: "/patient-profile", icon: <UserCircle size={20} /> },
+          {
+            name: "Profile",
+            path: "/patient-profile",
+            icon: <UserCircle size={20} />,
+          },
         ];
+    }
+  };
+
+  const navLinks = getNavLinks();
 
   return (
     <div className="drawer lg:drawer-open font-['DM_Sans']">
@@ -119,7 +160,7 @@ const Layout = () => {
             </button>
 
             <h1 className="text-md font-bold text-base-content/60 uppercase tracking-widest ml-2">
-              {navLinks.find((link) => link.path === location.pathname)?.name ||
+              {navLinks.find((link) => location.pathname === link.path)?.name ||
                 "MedicareAI"}
             </h1>
           </div>
@@ -146,7 +187,6 @@ const Layout = () => {
           </div>
         </header>
 
-        {/* PAGE CONTENT - This renders the nested routes */}
         <main className="p-4 md:p-6 lg:p-6 flex-1">
           <Outlet />
         </main>
@@ -160,7 +200,6 @@ const Layout = () => {
             isCollapsed ? "lg:w-20 w-64" : "w-64"
           }`}
         >
-          {/* Sidebar Header */}
           <div
             className={`p-6 border-b border-base-300 h-16 flex items-center bg-base-100 ${
               isCollapsed ? "lg:justify-center" : "justify-start"
@@ -172,7 +211,7 @@ const Layout = () => {
             >
               <span className="text-2xl min-w-[32px]">🩺</span>
               <span
-                className={`text-xl tracking-tight transition-opacity duration-300 ${
+                className={`text-xl tracking-tight ${
                   isCollapsed ? "lg:hidden block" : "block"
                 }`}
               >
@@ -181,51 +220,58 @@ const Layout = () => {
             </Link>
           </div>
 
-          {/* Nav Links */}
           <ul className="menu p-3 gap-2 flex-1 overflow-hidden items-start pl-4">
             <li
               className={`menu-title opacity-40 uppercase text-[10px] tracking-widest mb-2 px-4 ${
                 isCollapsed ? "lg:hidden block" : "block"
               }`}
             >
-              General
+              {user?.role === "ADMIN" ? "System Admin" : "General"}
             </li>
 
-            {navLinks.map((link) => (
-              <li
-                key={link.path}
-                className={`w-full ${
-                  isCollapsed ? "lg:tooltip lg:tooltip-right" : ""
-                } z-1000`}
-                data-tip={link.name}
-              >
-                <Link
-                  to={link.path}
-                  className={`flex items-center rounded-lg transition-all h-11 w-full ${
-                    isCollapsed ? "lg:justify-center lg:px-3" : "px-4 gap-4"
-                  } ${
-                    location.pathname === link.path
-                      ? "bg-primary text-primary-content font-bold shadow-md shadow-primary/20"
-                      : "hover:bg-base-200 text-base-content/80"
+            {navLinks.map((link) => {
+              // Logic to determine if link is active
+              const isActive =
+                location.pathname === link.path.split("?")[0] &&
+                (link.path.includes("?")
+                  ? location.search === link.path.split("?")[1] // Match the ?tab=...
+                  : location.search === ""); // Match base dashboard only if no query exists
+
+              return (
+                <li
+                  key={link.path}
+                  className={`w-full ${
+                    isCollapsed ? "lg:tooltip lg:tooltip-right" : ""
                   }`}
+                  data-tip={link.name}
                 >
-                  <span className="flex-shrink-0">{link.icon}</span>
-                  <span
-                    className={`flex-1 truncate ${
-                      isCollapsed ? "lg:hidden block" : "block"
+                  <Link
+                    to={link.path}
+                    className={`flex items-center rounded-lg transition-all h-11 w-full ${
+                      isCollapsed ? "lg:justify-center lg:px-3" : "px-4 gap-4"
+                    } ${
+                      isActive
+                        ? "bg-primary text-primary-content font-bold shadow-md shadow-primary/20"
+                        : "hover:bg-base-200 text-base-content/80"
                     }`}
                   >
-                    {link.name}
-                  </span>
-                  {!isCollapsed && location.pathname === link.path && (
-                    <ChevronRight size={14} className="opacity-50" />
-                  )}
-                </Link>
-              </li>
-            ))}
+                    <span className="flex-shrink-0">{link.icon}</span>
+                    <span
+                      className={`flex-1 truncate ${
+                        isCollapsed ? "lg:hidden block" : "block"
+                      }`}
+                    >
+                      {link.name}
+                    </span>
+                    {!isCollapsed && isActive && (
+                      <ChevronRight size={14} className="opacity-50" />
+                    )}
+                  </Link>
+                </li>
+              );
+            })}
           </ul>
 
-          {/* Footer */}
           <div
             className={`p-4 border-t border-base-300 bg-base-200/20 ${
               isCollapsed ? "lg:items-center" : "items-start"
@@ -233,7 +279,7 @@ const Layout = () => {
           >
             <div className="flex items-center gap-3">
               <div className="avatar">
-                <div className="w-9 rounded-lg bg-primary text-primary-content flex items-center justify-center font-bold">
+                <div className="w-9 rounded-lg bg-primary text-primary-content flex items-center justify-center font-bold uppercase">
                   {user?.name?.[0]}
                 </div>
               </div>
