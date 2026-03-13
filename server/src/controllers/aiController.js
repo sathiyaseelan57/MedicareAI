@@ -1,72 +1,137 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import Groq from "groq-sdk";
 import User from "../models/User.js";
 import PatientProfile from "../models/PatientProfile.js";
 import Appointment from "../models/Appointment.js";
 import Prescription from "../models/Prescription.js";
 import MedicationLog from "../models/MedicationLog.js";
 import asyncHandler from "express-async-handler";
+import dotenv from "dotenv";
+dotenv.config();
 
-console.log("Gemini Key Loaded:", process.env.GEMINI_API_KEY);
-// Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export const getPatientFullDetails = asyncHandler(async (req, res) => {
   const { patientId } = req.params;
 
-  // 1. Fetch Core Data
-  const [patientUser, profile, appointments, prescriptions, logs] = await Promise.all([
-    User.findById(patientId).select("-password"),
-    PatientProfile.findOne({ user: patientId }).populate('assignedWard'),
-    Appointment.find({ patient: patientId }).sort({ appointmentDate: -1 }).populate('doctor', 'name'),
-    Prescription.find({ patient: patientId }).sort({ createdAt: -1 }),
-    MedicationLog.find({ 
-      patient: patientId, 
-      date: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) } 
-    })
-  ]);
+  const [patientUser, profile, appointments, prescriptions, logs] =
+    await Promise.all([
+      User.findById(patientId).select("-password"),
+      PatientProfile.findOne({ user: patientId }).populate("assignedWard"),
+      Appointment.find({ patient: patientId })
+        .sort({ appointmentDate: -1 })
+        .populate("doctor", "name"),
+      Prescription.find({ patient: patientId }).sort({ createdAt: -1 }),
+      MedicationLog.find({
+        patient: patientId,
+        date: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      }),
+    ]);
 
-  if (!patientUser) return res.status(404).json({ message: "Patient not found" });
+  if (!patientUser)
+    return res.status(404).json({ message: "Patient not found" });
 
-  // 2. Calculate Adherence
-  const taken = logs.filter(l => l.status === 'TAKEN').length;
-  const adherenceRate = logs.length > 0 ? Math.round((taken / logs.length) * 100) : 0;
+  // --- PRECISE ADHERENCE CALCULATION ---
+  let totalExpectedDoses = 0;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  // 3. REAL GEMINI INTEGRATION
-  let aiSummary = "Summary unavailable.";
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
-    const prompt = `
-      You are a medical AI assistant. Summarize this patient's status for a doctor:
-      Patient: ${patientUser.name}, ${profile?.age}yo ${profile?.gender}.
-      History: ${profile?.medicalHistory?.map(h => h.condition).join(", ") || "None"}.
-      Medications: ${profile?.currentMedications?.map(m => m.name).join(", ") || "None"}.
-      Adherence: ${adherenceRate}% in the last 30 days.
-      Recent Appointments: ${appointments.slice(0, 2).map(a => a.reason).join("; ")}.
-      
-      Provide a concise 3-sentence summary: 1. Current Status, 2. Adherence/Risk, 3. Recommended Focus for today's visit.
-    `;
+  prescriptions.forEach((p) => {
+    const start = p.startDate ? new Date(p.startDate) : new Date(p.createdAt);
+    start.setHours(0, 0, 0, 0);
 
-    const result = await model.generateContent(prompt);
-    aiSummary = result.response.text();
-  } catch (error) {
-    console.error("Gemini Error:", error);
-    aiSummary = "AI service temporarily unavailable for summarization.";
-  }
+    p.medicines.forEach((m) => {
+      const diffTime = today - start;
+      let daysElapsed = Math.floor(diffTime / (1000 * 60 * 60 * 24)) + 1;
+      if (m.durationDays) daysElapsed = Math.min(daysElapsed, m.durationDays);
 
-  // 4. Send Response
+      if (daysElapsed > 0) {
+        totalExpectedDoses += daysElapsed * (m.timing?.length || 0);
+      }
+    });
+  });
+
+  const totalTakenDoses = logs.filter((l) => l.status === "Taken").length;
+  const adherenceRate =
+    totalExpectedDoses > 0
+      ? Math.round((totalTakenDoses / totalExpectedDoses) * 100)
+      : 0;
+
   res.json({
-    basicDetails: {
-      ...patientUser._doc,
-      ...profile?._doc,
-    },
+    basicDetails: { ...patientUser._doc, ...profile?._doc },
     adherenceRate,
-    aiSummary,
+    totalExpectedDoses,
+    totalTakenDoses,
     appointments,
     prescriptions: {
-      active: prescriptions.filter(p => p.isActive),
-      history: prescriptions.filter(p => !p.isActive)
+      active: prescriptions.filter((p) => p.isActive),
+      history: prescriptions.filter((p) => !p.isActive),
     },
-    reports: profile?.medicalHistory || []
   });
+});
+
+export const getPatientAiSummary = asyncHandler(async (req, res) => {
+  const { patientId } = req.params;
+
+  // We only fetch the minimal data needed for the prompt
+  const [patientUser, appointments, prescriptions, logs] = await Promise.all([
+    User.findById(patientId).select("name"),
+    Appointment.find({ patient: patientId })
+      .sort({ appointmentDate: -1 })
+      .limit(3),
+    Prescription.find({ patient: patientId }).sort({ createdAt: -1 }).limit(1),
+    MedicationLog.find({
+      patient: patientId,
+      date: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+    }),
+  ]);
+
+  if (!patientUser)
+    return res.status(404).json({ message: "Patient not found" });
+
+  // Recalculate adherence for AI context (or pass from frontend to save DB hits)
+  // Simplified adherence calculation for context
+  const totalTakenDoses = logs.filter((l) => l.status === "Taken").length;
+
+  const clinicalHistory = appointments
+    .map(
+      (appt) =>
+        `[${appt.appointmentDate?.toLocaleDateString()}] ${
+          appt.diagnosis || "No Diagnosis"
+        }: ${appt.notes || "No notes"}`
+    )
+    .join(" | ");
+
+  const medicineList =
+    prescriptions[0]?.medicines.map((m) => m.name).join(", ") || "None";
+
+  try {
+    const prompt = `Analyze: Patient ${patientUser.name}. 
+    Recent Doses Taken (last 30 days): ${totalTakenDoses}. 
+    Clinical History: ${clinicalHistory}. 
+    Active Meds: ${medicineList}.
+    Provide a 3-sentence professional briefing: 1. Status, 2. Compliance/Risk, 3. Focus for today.`;
+
+    const chat = await groq.chat.completions.create({
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a senior medical consultant AI. Provide concise clinical briefings.",
+        },
+        { role: "user", content: prompt },
+      ],
+      model: "llama-3.3-70b-versatile",
+      temperature: 0.2,
+      max_tokens: 300,
+    });
+
+    res.json({
+      aiSummary: chat.choices[0]?.message?.content || "Analysis complete.",
+    });
+  } catch (err) {
+    console.error("Groq Error:", err);
+    res
+      .status(500)
+      .json({ aiSummary: "AI briefing service currently unavailable." });
+  }
 });
