@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 import { useAuthStore } from "./store/useAuthStore";
-import { useEffect, border } from "react";
+import { useEffect } from "react";
 
 // Components & Pages
 import Layout from "./components/Layout";
@@ -20,6 +20,7 @@ import PatientReports from "./pages/Reports";
 import PatientDashboard from "./pages/PatientDashboard";
 import DoctorDashboard from "./pages/DoctorDashboard";
 import PatientDetails from "./pages/PatientDetails";
+import PatientChatbot from "./components/PatientChatbot"; // Import the chatbot component
 
 const NotFound = () => (
   <div className="flex h-screen flex-col items-center justify-center bg-base-200">
@@ -37,18 +38,16 @@ const NotFound = () => (
 );
 
 // --- PROTECTED ROUTE WRAPPER ---
-// Accepts an array of roles e.g., ["ADMIN", "DOCTOR"]
 const ProtectedRoute = ({ allowedRoles }) => {
   const { user, isAuthenticated } = useAuthStore();
 
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
-  // Check if the user's role exists in the allowedRoles array
   if (allowedRoles && !allowedRoles.includes(user?.role)) {
     return <Navigate to="/" replace />;
   }
 
-  return <Layout />; // Renders the Sidebar/Navbar shell
+  return <Layout />;
 };
 
 // --- PUBLIC ROUTE WRAPPER ---
@@ -93,11 +92,7 @@ function App() {
         <Route
           path="/"
           element={
-            isCheckingAuth ? (
-              <div className="flex h-screen items-center justify-center bg-base-200">
-                <span className="loading loading-infinity loading-lg text-primary"></span>
-              </div>
-            ) : !user ? (
+            !user ? (
               <Navigate to="/login" replace />
             ) : user.role === "ADMIN" ? (
               <Navigate to="/admin-dashboard" replace />
@@ -110,22 +105,8 @@ function App() {
         />
 
         {/* --- PUBLIC ACCESS --- */}
-        <Route
-          path="/login"
-          element={
-            <PublicRoute>
-              <Login />
-            </PublicRoute>
-          }
-        />
-        <Route
-          path="/register"
-          element={
-            <PublicRoute>
-              <Register />
-            </PublicRoute>
-          }
-        />
+        <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+        <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
 
         {/* --- ADMIN ONLY ROUTES --- */}
         <Route element={<ProtectedRoute allowedRoles={["ADMIN"]} />}>
@@ -160,6 +141,14 @@ function App() {
         {/* --- 404 CATCH-ALL --- */}
         <Route path="*" element={<NotFound />} />
       </Routes>
+
+      {/* --- GLOBAL PATIENT CHATBOT --- */}
+      {/* This renders the chatbot on every page if the user is a patient */}
+      {user?.role === "PATIENT" && (
+        <div className="fixed bottom-6 right-6 z-[9999]">
+          <PatientChatbot />
+        </div>
+      )}
     </BrowserRouter>
   );
 }

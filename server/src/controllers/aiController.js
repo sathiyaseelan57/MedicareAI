@@ -135,3 +135,63 @@ export const getPatientAiSummary = asyncHandler(async (req, res) => {
       .json({ aiSummary: "AI briefing service currently unavailable." });
   }
 });
+
+export const handlePatientQuery = asyncHandler(async (req, res) => {
+  // 1. Destructure 'history' from the body
+  const { query, history } = req.body;
+  const { patientId } = req.params;
+
+  const [patientUser, appointments, prescriptions] = await Promise.all([
+    User.findById(patientId).select("name allergies medicalConditions"),
+    Appointment.find({ patient: patientId })
+      .sort({ appointmentDate: -1 })
+      .limit(3),
+    Prescription.find({ patient: patientId }).sort({ createdAt: -1 }).limit(1),
+  ]);
+
+  if (!patientUser)
+    return res.status(404).json({ message: "Patient not found" });
+
+  const clinicalHistory = appointments
+    .map(
+      (appt) =>
+        `[${appt.appointmentDate?.toLocaleDateString()}] ${
+          appt.diagnosis || "General"
+        }`
+    )
+    .join(" | ");
+
+  const patientAllergies =
+    patientUser.allergies?.length > 0
+      ? patientUser.allergies.join(", ")
+      : "No known allergies.";
+
+  const systemPrompt = `
+    You are "MediGuide," an AI health assistant for ${patientUser.name}.
+    CONTEXT: Allergies: ${patientAllergies}. History: ${clinicalHistory}.
+    RULES: If user says 'Yes' or 'Sure', look at the chat history to see what they are agreeing to. 
+    Keep responses under 4 sentences.
+  `;
+
+  // 2. Build the message array with history
+  // Format: [{role: "user", content: "..."}, {role: "assistant", content: "..."}]
+  const chatMessages = [
+    { role: "system", content: systemPrompt },
+    ...history, // This inserts the previous back-and-forth
+    { role: "user", content: query }, // This is the new message (e.g., "Yes")
+  ];
+
+  try {
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: chatMessages,
+      temperature: 0.4,
+    });
+
+    res.status(200).json({
+      reply: response.choices[0]?.message?.content,
+    });
+  } catch (error) {
+    res.status(500).json({ reply: "I lost my train of thought. Try again?" });
+  }
+});

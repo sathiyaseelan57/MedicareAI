@@ -79,11 +79,6 @@ const Layout = () => {
             icon: <Calendar size={20} />,
           },
           {
-            name: "AI Assistant",
-            path: "/ai-assistant",
-            icon: <Bot size={20} />,
-          },
-          {
             name: "My Reports",
             path: "/reports",
             icon: <ClipboardList size={20} />,
@@ -106,11 +101,6 @@ const Layout = () => {
             name: "Appointments",
             path: "/view-appointments",
             icon: <Calendar size={20} />,
-          },
-          {
-            name: "AI Assistant",
-            path: "/ai-assistant",
-            icon: <Bot size={20} />,
           },
           {
             name: "Prescriptions",
