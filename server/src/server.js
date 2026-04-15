@@ -4,13 +4,16 @@ import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
 
 // 1. LOAD DOTENV FIRST (Before anything else)
-dotenv.config(); 
+dotenv.config();
 
 // 2. DEBUG LOG (Check if key is visible to the process immediately)
 console.log("-----------------------------------------");
 console.log("Environment Check:");
 console.log("PORT:", process.env.PORT);
-console.log("Gemini Key Exists:", process.env.GEMINI_API_KEY ? "✅ YES" : "❌ NO");
+console.log(
+  "Gemini Key Exists:",
+  process.env.GEMINI_API_KEY ? "✅ YES" : "❌ NO"
+);
 console.log("-----------------------------------------");
 
 import connectDB from "./config/db.js";
@@ -22,6 +25,7 @@ import aiRoutes from "./routes/aiRoutes.js";
 import reportRoutes from "./routes/reportRoutes.js";
 import { errorHandler } from "./middleware/errorMiddleware.js";
 import morgan from "morgan"; // Ensure this is imported!
+import initCronJobs from "./services/cronJobs.js";
 
 // Initialize DB
 connectDB();
@@ -56,6 +60,8 @@ app.get("/health", (req, res) => {
 });
 
 app.use(errorHandler);
+
+// initCronJobs();
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
